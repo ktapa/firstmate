@@ -825,6 +825,8 @@ EOF
       # (bin/fm-pr-lib.sh owns that contract). The rename lands under the meta
       # lock this command already holds.
       CAPTAIN_META_TMP="$STATE/.$origin.meta.captain-hold.${BASHPID:-$$}"
+      fm_pr_meta_terminal_validate "$meta" \
+        || fail "could not validate the task record for $origin"
       meta_mode=$(fm_pr_file_mode "$meta") \
         || fail "could not read the task record mode for $origin"
       cp -- "$meta" "$CAPTAIN_META_TMP" \
@@ -833,7 +835,7 @@ EOF
         || fail "could not stage the review record for $origin"
       printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$CAPTAIN_META_TMP" \
         || fail "could not stage the review record for $origin"
-      fm_pr_meta_terminal_restage "$CAPTAIN_META_TMP" decisions_reviewed decision_keys \
+      fm_pr_meta_terminal_restage "$meta" "$CAPTAIN_META_TMP" \
         || fail "could not stage the review record for $origin"
       mv -f -- "$CAPTAIN_META_TMP" "$meta" \
         || fail "could not record the reviewed decisions for $origin"

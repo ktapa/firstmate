@@ -400,6 +400,53 @@ test_relaunch_refuses_a_preexisting_invalid_pr_suffix() {
   pass "fm-control relaunch: a pre-existing invalid PR suffix is named and preserved"
 }
 
+test_relaunch_refuses_its_own_preexisting_suffix_key() {
+  local dir before after out rc url=https://github.com/example/repo/pull/50
+  dir=$(new_case merge-poll-own-invalid-suffix rl50)
+  add_ship_task "$dir" rl50 claude
+  arm_merge_poll "$dir" rl50 "$url"
+  printf 'control_relaunch_tx=old\n' >> "$dir/home/state/rl50.meta"
+  before=$(shasum -a 256 "$dir/home/state/rl50.meta" | awk '{print $1}')
+
+  out=$(run_control "$dir" rl50 relaunch --note "must reject its own old suffix"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a relaunch should refuse its own pre-existing suffix key"
+  printf '%s\n' "$out" | grep -q 'control_relaunch_tx' \
+    || fail "the relaunch refusal did not name control_relaunch_tx: $out"
+  after=$(shasum -a 256 "$dir/home/state/rl50.meta" | awk '{print $1}')
+  [ "$before" = "$after" ] || fail "the refused relaunch normalised its own pre-existing suffix key"
+  pass "fm-control relaunch: its own pre-existing suffix key is named and preserved"
+}
+
+test_trace_recording_refuses_its_own_preexisting_suffix_key() {
+  local dir before after out rc pid prepare release i=0 url=https://github.com/example/repo/pull/52
+  dir=$(new_case merge-poll-trace-own-invalid-suffix rl52)
+  add_ship_task "$dir" rl52 claude
+  printf '%s\n' "$$" > "$dir/home/state/.lock"
+  printf '%s on\n' "$$" > "$dir/home/state/.trace-context-effective"
+  arm_merge_poll "$dir" rl52 "$url"
+  prepare="$dir/trace-own-prepare"
+  release="$dir/trace-own-release"
+  FM_FAKE_TRACE_PREPARE="$prepare" FM_FAKE_TRACE_RELEASE="$release" \
+    run_control "$dir" rl52 relaunch --note "must reject the old carrier suffix" > "$dir/trace-own.out" &
+  pid=$!
+  while [ ! -e "$prepare" ] && [ "$i" -lt 200 ]; do
+    /bin/sleep 0.01
+    i=$((i + 1))
+  done
+  [ -e "$prepare" ] || fail "the relaunch did not reach trace recording"
+  printf 'traceparent=old\n' >> "$dir/home/state/rl52.meta"
+  before=$(shasum -a 256 "$dir/home/state/rl52.meta" | awk '{print $1}')
+  : > "$release"
+  wait "$pid"; rc=$?
+  out=$(cat "$dir/trace-own.out")
+  [ "$rc" -ne 0 ] || fail "trace recording should refuse its own pre-existing suffix key"
+  printf '%s\n' "$out" | grep -q 'traceparent' \
+    || fail "the trace recording refusal did not name traceparent: $out"
+  after=$(shasum -a 256 "$dir/home/state/rl52.meta" | awk '{print $1}')
+  [ "$before" = "$after" ] || fail "trace recording normalised its own pre-existing suffix key"
+  pass "fm-spawn trace recording: its own pre-existing suffix key is named and preserved"
+}
+
 # The same guarantee on the path that also writes a carrier after the record is
 # rebuilt, which is a second writer of the same record in the same relaunch.
 test_relaunch_with_trace_context_keeps_the_merge_poll_recognised() {
@@ -440,6 +487,26 @@ test_promotion_keeps_the_armed_merge_poll_recognised() {
   assert_merge_poll_recognised "$dir" rl48 \
     "the promotion left the merge poll unrecognised: the watcher would reject it as an unauthenticated check instead of polling for the merge"
   pass "fm-promote: promoting a task that already recorded a PR keeps its merge poll recognised"
+}
+
+test_promotion_refuses_its_own_preexisting_suffix_key() {
+  local dir before after out rc url=https://github.com/example/repo/pull/53
+  dir=$(new_case merge-poll-promote-own-invalid-suffix rl53)
+  add_ship_task "$dir" rl53 claude
+  sed 's/^kind=ship$/kind=scout/' "$dir/home/state/rl53.meta" > "$dir/rl53.meta.scout"
+  mv "$dir/rl53.meta.scout" "$dir/home/state/rl53.meta"
+  arm_merge_poll "$dir" rl53 "$url"
+  printf 'kind=scout\n' >> "$dir/home/state/rl53.meta"
+  before=$(shasum -a 256 "$dir/home/state/rl53.meta" | awk '{print $1}')
+
+  out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    "$PROMOTE" rl53 --mode direct-PR --yolo off 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "promotion should refuse its own pre-existing suffix key"
+  printf '%s\n' "$out" | grep -q 'kind' \
+    || fail "the promotion refusal did not name kind: $out"
+  after=$(shasum -a 256 "$dir/home/state/rl53.meta" | awk '{print $1}')
+  [ "$before" = "$after" ] || fail "promotion normalised its own pre-existing suffix key"
+  pass "fm-promote: its own pre-existing suffix key is named and preserved"
 }
 
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
@@ -1592,8 +1659,11 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_keeps_the_armed_merge_poll_recognised
 test_relaunch_refuses_a_preexisting_invalid_pr_suffix
+test_relaunch_refuses_its_own_preexisting_suffix_key
 test_relaunch_with_trace_context_keeps_the_merge_poll_recognised
+test_trace_recording_refuses_its_own_preexisting_suffix_key
 test_promotion_keeps_the_armed_merge_poll_recognised
+test_promotion_refuses_its_own_preexisting_suffix_key
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
