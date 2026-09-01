@@ -72,12 +72,23 @@ wedge_alarm_platform_default() {
 
 # wedge_alarm_reliable_channel_configured: 0 when at least one configured
 # directive is a directive wedge_alarm_notify's dispatch actually recognizes -
-# off, osascript, herdr, command:<cmd> - or an auto/default that resolves to a
-# real platform channel; 1 when every configured line is auto/default and none
-# resolve to anything, OR when a configured line is not a recognized directive
-# at all (a typo or malformed line would otherwise pass this check as
-# "reliable" while wedge_alarm_notify's dispatch silently no-ops on it at
-# runtime) - both are the silent-alarm gaps this predicate exists to catch.
+# off, osascript, herdr, command:<cmd> with a NON-EMPTY <cmd> - or an
+# auto/default that resolves to a real platform channel; 1 when every
+# configured line is auto/default and none resolve to anything, OR when a
+# configured line is not a recognized directive at all (a typo or malformed
+# line would otherwise pass this check as "reliable" while
+# wedge_alarm_notify's dispatch silently no-ops on it at runtime) - both are
+# the silent-alarm gaps this predicate exists to catch. A bare `command:` with
+# no payload falls into the same unrecognized-directive rejection as a typo:
+# wedge_alarm_via_command's own `[ -n "$cmd" ]` guard can never fire it, so
+# treating it as reliable would be exactly the reassurance-that-doesn't-hold
+# gap this predicate exists to catch. osascript and herdr are not given the
+# same binary-presence check: unlike an empty command: payload, which can
+# never work on any machine, a missing osascript/herdr binary is an
+# environmental fact that can differ by host and change over time - the same
+# category of runtime risk as a command:<cmd> whose <cmd> itself is broken,
+# which this predicate deliberately leaves to wedge_alarm_notify's
+# best-effort, logged dispatch rather than validating at entry time.
 wedge_alarm_reliable_channel_configured() {
   local ch found_real=1
   while IFS= read -r ch; do
@@ -86,7 +97,7 @@ wedge_alarm_reliable_channel_configured() {
       auto|default)
         [ -n "$(wedge_alarm_platform_default)" ] && found_real=0
         ;;
-      off|osascript|herdr|command:*)
+      off|osascript|herdr|command:?*)
         found_real=0
         ;;
       *)

@@ -887,6 +887,35 @@ unit_wedge_alarm_preflight_refuses_malformed_directive() {
   rm -rf "$st"
 }
 
+unit_wedge_alarm_preflight_refuses_empty_command_directive() {
+  local st out rc
+  st=$(make_wedge_preflight_case empty-command)
+  out=$(PATH="$st/fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_WEDGE_ALARM_CHANNEL='command:' \
+    bash -c '. "$1"; fm_afk_launch_wedge_alarm_preflight' _ "$LAUNCH" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "no active wedge-alarm channel is configured"; then
+    pass "wedge-alarm preflight: refuses entry on a bare 'command:' directive with no payload"
+  else
+    fail "wedge-alarm preflight: a bare 'command:' directive was accepted as reliable (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
+unit_wedge_alarm_preflight_accepts_command_with_payload() {
+  local st out rc
+  st=$(make_wedge_preflight_case command-payload)
+  out=$(PATH="$st/fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+    FM_WEDGE_ALARM_CHANNEL='command:/usr/bin/notify-send' \
+    bash -c '. "$1"; fm_afk_launch_wedge_alarm_preflight' _ "$LAUNCH" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+    pass "wedge-alarm preflight: a 'command:<cmd>' directive with a real payload passes entry"
+  else
+    fail "wedge-alarm preflight: 'command:<cmd>' with a payload unexpectedly refused entry (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
 # ---------------------------------------------------------------------------
 # E2E herdr: topology invariant.
 # ---------------------------------------------------------------------------
@@ -1022,6 +1051,8 @@ unit_flag_write_failure_aborts
 unit_wedge_alarm_preflight_refuses_without_channel
 unit_wedge_alarm_preflight_accepts_explicit_off
 unit_wedge_alarm_preflight_refuses_malformed_directive
+unit_wedge_alarm_preflight_refuses_empty_command_directive
+unit_wedge_alarm_preflight_accepts_command_with_payload
 e2e_herdr
 e2e_tmux
 
