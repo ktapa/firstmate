@@ -437,8 +437,10 @@ test_meta_terminal_restage_moves_lines_and_nothing_else() {
   [ "$before" = "$after" ] || fail "restaging rewrote a record that records no PR"
 
   file="$dir/duplicate.meta"
+  printf '%s\n' 'pr=https://github.com/o/r/pull/7' > "$dir/duplicate-original.meta"
   printf '%s\n' 'pr=https://github.com/o/r/pull/7' 'x=1' 'pr=https://github.com/o/r/pull/8' > "$file"
-  fm_pr_meta_terminal_restage "$file" "$file" || fail "restaging a duplicated record failed"
+  fm_pr_meta_terminal_restage "$dir/duplicate-original.meta" "$file" \
+    || fail "restaging a duplicated record failed"
   fm_pr_metadata_identity_parse "$file" \
     && fail "restaging merged two recorded PRs into a record that parses"
   pass "task-record restage moves the PR identity block to the end and changes nothing else"
