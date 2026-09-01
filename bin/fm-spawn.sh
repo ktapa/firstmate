@@ -2909,7 +2909,7 @@ preserve_relaunch_meta() {
 # record is restaged to keep the PR identity block terminal before publication
 # (bin/fm-pr-lib.sh owns that contract). Without it a relaunch after the PR was
 # recorded leaves the task's merge poll refusing to validate.
-fm_pr_meta_terminal_restage "$SPAWN_META_PATH" || {
+fm_pr_meta_terminal_restage "$SPAWN_META_PATH" control_relaunch_tx || {
   echo "error: task record for $ID could not be prepared at $SPAWN_META_PATH" >&2
   exit 1
 }
@@ -3031,7 +3031,7 @@ spawn_record_traceparent() {
   if [ ! -f "$meta" ] || [ ! -w "$meta" ] \
      || ! awk -F= '$1 != "traceparent"' "$meta" > "$SPAWN_META_TMP" \
      || ! printf 'traceparent=%s\n' "$SPAWN_TRACEPARENT" >> "$SPAWN_META_TMP" \
-     || ! fm_pr_meta_terminal_restage "$SPAWN_META_TMP" \
+     || ! fm_pr_meta_terminal_restage "$SPAWN_META_TMP" traceparent \
      || ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$meta" "task record" "$STATE"; then
     status=1
     rm -f "$SPAWN_META_TMP" 2>/dev/null || true

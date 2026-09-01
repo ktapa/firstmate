@@ -314,10 +314,10 @@ test_relaunch_preserves_durable_task_metadata() {
   dir=$(new_case durable-meta rl19)
   add_ship_task "$dir" rl19 claude
   {
+    printf '%s\n' 'decisions_reviewed=1'
     printf '%s\n' 'pr=https://github.com/example/repo/pull/19'
     printf '%s\n' 'pr_head=feature/relaunch'
     printf '%s\n' 'x_request=request-19'
-    printf '%s\n' 'decisions_reviewed=1'
   } >> "$dir/home/state/rl19.meta"
 
   out=$(run_control "$dir" rl19 relaunch --note "continuing review work"); rc=$?
@@ -376,6 +376,28 @@ test_relaunch_keeps_the_armed_merge_poll_recognised() {
   assert_merge_poll_recognised "$dir" rl46 \
     "the relaunch left the merge poll unrecognised: the watcher would reject it as an unauthenticated check instead of polling for the merge"
   pass "fm-control relaunch: an armed merge poll survives replacing the agent"
+}
+
+# A suffix that predates the relaunch is evidence of an unaware writer. The
+# relaunch must report it and leave the live record untouched instead of making
+# the anomalous record valid while preparing its own replacement.
+test_relaunch_refuses_a_preexisting_invalid_pr_suffix() {
+  local dir before after out rc url=https://github.com/example/repo/pull/49
+  dir=$(new_case merge-poll-invalid-suffix rl49)
+  add_ship_task "$dir" rl49 claude
+  arm_merge_poll "$dir" rl49 "$url"
+  printf 'unaware_writer_key=unexpected\n' >> "$dir/home/state/rl49.meta"
+  before=$(shasum -a 256 "$dir/home/state/rl49.meta" | awk '{print $1}')
+
+  out=$(run_control "$dir" rl49 relaunch --note "must reject the anomalous record"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a relaunch should refuse a pre-existing invalid PR suffix"
+  printf '%s\n' "$out" | grep -q 'unaware_writer_key' \
+    || fail "the relaunch refusal did not name the offending metadata key: $out"
+  after=$(shasum -a 256 "$dir/home/state/rl49.meta" | awk '{print $1}')
+  [ "$before" = "$after" ] || fail "the refused relaunch normalised or otherwise changed the anomalous record"
+  fm_pr_metadata_identity_parse "$dir/home/state/rl49.meta" \
+    && fail "the refused relaunch made the anomalous record parse"
+  pass "fm-control relaunch: a pre-existing invalid PR suffix is named and preserved"
 }
 
 # The same guarantee on the path that also writes a carrier after the record is
@@ -1569,6 +1591,7 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_keeps_the_armed_merge_poll_recognised
+test_relaunch_refuses_a_preexisting_invalid_pr_suffix
 test_relaunch_with_trace_context_keeps_the_merge_poll_recognised
 test_promotion_keeps_the_armed_merge_poll_recognised
 test_relaunch_serializes_concurrent_durable_metadata_publication

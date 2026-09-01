@@ -294,14 +294,16 @@ fm_pr_regular_destination_on_device_or_absent() {
 # source are.
 #
 # Every writer that rewrites or extends a task record therefore stages its
-# result and calls this on the staged file before publishing it, so a key the
-# writer owns can never land behind the identity block. This moves lines and
-# nothing else: no key is added, dropped, or rewritten, the relative order of
-# every other line is preserved, and a record carrying no `pr=` line is left
-# untouched. A record carrying more than one `pr=` line stays invalid, because
-# moving the duplicates does not merge them.
+# result and calls this with the keys it just added before publishing it. The
+# restage refuses any other key behind the identity block, preserving the
+# evidence of an earlier accidental append instead of normalising it away. It
+# otherwise moves lines and nothing else: no key is added, dropped, or
+# rewritten, the relative order of every other line is preserved, and a record
+# carrying no `pr=` line is left untouched. A record carrying more than one
+# `pr=` line stays invalid, because moving the duplicates does not merge them.
 fm_pr_meta_terminal_restage() {
-  local file=$1 line rest='' identity='' seen_pr=0
+  local file=$1 line key shown_key allowed allowed_key rest='' identity='' invalid='' seen_pr=0
+  shift
   [ -f "$file" ] && [ ! -L "$file" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
@@ -315,12 +317,35 @@ fm_pr_meta_terminal_restage() {
 "
         ;;
       *)
+        if [ "$seen_pr" -eq 1 ]; then
+          key=${line%%=*}
+          shown_key=${key:-'<empty>'}
+          case "$key" in
+            x_*) allowed=1 ;;
+            *)
+              allowed=0
+              for allowed_key in "$@"; do
+                [ "$key" != "$allowed_key" ] || allowed=1
+              done
+              ;;
+          esac
+          if [ "$allowed" -ne 1 ]; then
+            case " $invalid " in
+              *" $shown_key "*) ;;
+              *) invalid="${invalid}${invalid:+, }$shown_key" ;;
+            esac
+          fi
+        fi
         rest="$rest$line
 "
         ;;
     esac
   done < "$file"
   [ "$seen_pr" -eq 1 ] || return 0
+  if [ -n "$invalid" ]; then
+    printf 'error: task record has invalid key(s) after pr=: %s\n' "$invalid" >&2
+    return 1
+  fi
   printf '%s%s' "$rest" "$identity" > "$file"
 }
 

@@ -407,7 +407,7 @@ test_meta_terminal_restage_moves_lines_and_nothing_else() {
     'pr_head=0123456789abcdef0123456789abcdef01234567' 'control_relaunch_tx=abc' > "$file"
   fm_pr_metadata_identity_parse "$file" \
     && fail "a key appended behind the PR identity block should not parse"
-  fm_pr_meta_terminal_restage "$file" || fail "restaging an appended record failed"
+  fm_pr_meta_terminal_restage "$file" control_relaunch_tx || fail "restaging an appended record failed"
   fm_pr_metadata_identity_parse "$file" \
     || fail "restaging did not restore a record a writer had appended to"
   [ "$FM_PR_META_URL" = https://github.com/o/r/pull/7 ] \
@@ -422,7 +422,7 @@ test_meta_terminal_restage_moves_lines_and_nothing_else() {
 
   file="$dir/ordering.meta"
   printf '%s\n' 'a=1' 'pr=https://github.com/o/r/pull/7' 'b=2' 'c=3' > "$file"
-  fm_pr_meta_terminal_restage "$file" || fail "restaging an ordered record failed"
+  fm_pr_meta_terminal_restage "$file" b c || fail "restaging an ordered record failed"
   [ "$(tr '\n' ' ' < "$file")" = 'a=1 b=2 c=3 pr=https://github.com/o/r/pull/7 ' ] \
     || fail "restaging did not preserve the relative order of the other keys"
 
@@ -435,7 +435,7 @@ test_meta_terminal_restage_moves_lines_and_nothing_else() {
 
   file="$dir/duplicate.meta"
   printf '%s\n' 'pr=https://github.com/o/r/pull/7' 'x=1' 'pr=https://github.com/o/r/pull/8' > "$file"
-  fm_pr_meta_terminal_restage "$file" || fail "restaging a duplicated record failed"
+  fm_pr_meta_terminal_restage "$file" x || fail "restaging a duplicated record failed"
   fm_pr_metadata_identity_parse "$file" \
     && fail "restaging merged two recorded PRs into a record that parses"
   pass "task-record restage moves the PR identity block to the end and changes nothing else"

@@ -833,7 +833,7 @@ EOF
         || fail "could not stage the review record for $origin"
       printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$CAPTAIN_META_TMP" \
         || fail "could not stage the review record for $origin"
-      fm_pr_meta_terminal_restage "$CAPTAIN_META_TMP" \
+      fm_pr_meta_terminal_restage "$CAPTAIN_META_TMP" decisions_reviewed decision_keys \
         || fail "could not stage the review record for $origin"
       mv -f -- "$CAPTAIN_META_TMP" "$meta" \
         || fail "could not record the reviewed decisions for $origin"
