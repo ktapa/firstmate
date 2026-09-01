@@ -240,9 +240,11 @@ unit_concurrent_start_serialized() {
   TRACK_TMUX_SESSIONS="$TRACK_TMUX_SESSIONS $cap_session"
   cap_pane=$(tmux display-message -p -t "$cap_session" '#{pane_id}')
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET="$cap_pane" \
-    FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" "$LAUNCH" start >/dev/null 2>&1 & first=$!
+    FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" FM_WEDGE_ALARM_CHANNEL=off \
+    "$LAUNCH" start >/dev/null 2>&1 & first=$!
   FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET="$cap_pane" \
-    FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" "$LAUNCH" start >/dev/null 2>&1 & second=$!
+    FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" FM_WEDGE_ALARM_CHANNEL=off \
+    "$LAUNCH" start >/dev/null 2>&1 & second=$!
   wait "$first"; wait "$second"
   rec=$(cut -f2 "$st/state/.afk-daemon-terminal" 2>/dev/null || true)
   count=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | awk -v expected="$rec" '$0 == expected {n++} END{print n+0}')
@@ -488,7 +490,7 @@ unit_native_lifecycle() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-native.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" "$LAUNCH" start-native >/dev/null 2>&1 \
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_WEDGE_ALARM_CHANNEL=off "$LAUNCH" start-native >/dev/null 2>&1 \
     && [ "$(cut -f1 "$st/state/.afk-daemon-terminal")" = none ] \
     && [ -e "$st/state/.afk" ] \
     && [ ! -e "$st/state/.subsuper-escalations" ]; then
@@ -759,7 +761,7 @@ unit_clear_failure_aborts_entry() {
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-clear-fail.XXXXXX")
   mkdir -p "$st/state"
   : > "$st/state/.subsuper-escalations"
-  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+  if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_WEDGE_ALARM_CHANNEL=off bash -c '
     . "$1"
     fm_afk_launch_reconcile() { return 0; }
     fm_afk_clear_stale_artifacts() { return 1; }
@@ -812,7 +814,7 @@ unit_flag_write_failure_aborts() {
   local st
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-flag-fail.XXXXXX")
   mkdir -p "$st/state"
-  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" bash -c '
+  FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_WEDGE_ALARM_CHANNEL=off bash -c '
     . "$1"
     fm_afk_launch_flag_write() { return 1; }
     ! fm_afk_launch_start_native
@@ -863,6 +865,7 @@ e2e_herdr() {
 
   FM_HOME="$home_tmp" FM_STATE_OVERRIDE="$home_tmp/state" \
     FM_SUPERVISOR_TARGET="$target" FM_SUPERVISOR_BACKEND=herdr FM_AFK_LAUNCH_ENTRY="$SLEEPER" \
+    FM_WEDGE_ALARM_CHANNEL=off \
     "$LAUNCH" start >/dev/null 2>&1
 
   during=$(fm_backend_herdr_cli "$SESSION" pane list --workspace "$cap_ws" 2>/dev/null | jq --arg t "$cap_tab" '[.result.panes[]?|select(.tab_id==$t)]|length')
@@ -903,6 +906,7 @@ e2e_tmux() {
 
   FM_HOME="$home_tmp" FM_STATE_OVERRIDE="$home_tmp/state" \
     FM_SUPERVISOR_TARGET="$cap_pane" FM_SUPERVISOR_BACKEND=tmux FM_AFK_LAUNCH_ENTRY="$SLEEPER" \
+    FM_WEDGE_ALARM_CHANNEL=off \
     "$LAUNCH" start >/dev/null 2>&1
 
   during=$(tmux list-panes -t "$cap_session" | wc -l | tr -d ' ')
