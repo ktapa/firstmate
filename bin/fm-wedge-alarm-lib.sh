@@ -71,10 +71,13 @@ wedge_alarm_platform_default() {
 }
 
 # wedge_alarm_reliable_channel_configured: 0 when at least one configured
-# directive is an explicit choice (off, osascript, herdr, command:<cmd>) or an
-# auto/default that resolves to a real platform channel; 1 only when every
-# configured line is auto/default and none of them resolve to anything - the
-# silent-by-default gap this predicate exists to catch.
+# directive is a directive wedge_alarm_notify's dispatch actually recognizes -
+# off, osascript, herdr, command:<cmd> - or an auto/default that resolves to a
+# real platform channel; 1 when every configured line is auto/default and none
+# resolve to anything, OR when a configured line is not a recognized directive
+# at all (a typo or malformed line would otherwise pass this check as
+# "reliable" while wedge_alarm_notify's dispatch silently no-ops on it at
+# runtime) - both are the silent-alarm gaps this predicate exists to catch.
 wedge_alarm_reliable_channel_configured() {
   local ch found_real=1
   while IFS= read -r ch; do
@@ -83,8 +86,11 @@ wedge_alarm_reliable_channel_configured() {
       auto|default)
         [ -n "$(wedge_alarm_platform_default)" ] && found_real=0
         ;;
-      *)
+      off|osascript|herdr|command:*)
         found_real=0
+        ;;
+      *)
+        return 1
         ;;
     esac
   done < <(wedge_alarm_configured_channels)

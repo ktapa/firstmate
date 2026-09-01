@@ -219,7 +219,7 @@ unit_failed_start_rolls_back_state() {
   printf 'pending\n' > "$st/state/.subsuper-escalations"
   printf 'wedged\n' > "$st/state/.subsuper-inject-wedged"
   if FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_SUPERVISOR_TARGET=unused \
-    FM_SUPERVISOR_BACKEND=unsupported "$LAUNCH" start >/dev/null 2>&1; then
+    FM_SUPERVISOR_BACKEND=unsupported FM_WEDGE_ALARM_CHANNEL=off "$LAUNCH" start >/dev/null 2>&1; then
     fail "failed start: unsupported backend unexpectedly succeeded"
   elif [ ! -e "$st/state/.afk" ] \
     && [ "$(cat "$st/state/.subsuper-escalations")" = pending ] \
@@ -828,6 +828,65 @@ unit_flag_write_failure_aborts() {
 }
 
 # ---------------------------------------------------------------------------
+# UNIT: fm_afk_launch_wedge_alarm_preflight (fresh-entry refusal when no
+# reliable wedge-alarm channel is configured; fm-wedge-alarm-lib.sh).
+# ---------------------------------------------------------------------------
+make_wedge_preflight_case() {  # <name> -> echoes dir; creates state/ and a fake non-Darwin uname on PATH
+  local name=$1 dir fakebin
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-wedge-preflight-$name.XXXXXX")
+  fakebin="$dir/fakebin"
+  mkdir -p "$dir/state" "$fakebin"
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' Linux
+SH
+  chmod +x "$fakebin/uname"
+  printf '%s\n' "$dir"
+}
+
+unit_wedge_alarm_preflight_refuses_without_channel() {
+  local st out rc
+  st=$(make_wedge_preflight_case no-channel)
+  out=$(PATH="$st/fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+    env -u FM_WEDGE_ALARM_CHANNEL bash -c '. "$1"; fm_afk_launch_wedge_alarm_preflight' _ "$LAUNCH" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "no active wedge-alarm channel is configured"; then
+    pass "wedge-alarm preflight: refuses a fresh entry with no configured channel and no platform default"
+  else
+    fail "wedge-alarm preflight: did not refuse with no channel configured (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
+unit_wedge_alarm_preflight_accepts_explicit_off() {
+  local st out rc
+  st=$(make_wedge_preflight_case explicit-off)
+  out=$(PATH="$st/fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_WEDGE_ALARM_CHANNEL=off \
+    bash -c '. "$1"; fm_afk_launch_wedge_alarm_preflight' _ "$LAUNCH" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+    pass "wedge-alarm preflight: an explicit 'off' acknowledgment passes entry"
+  else
+    fail "wedge-alarm preflight: explicit 'off' unexpectedly refused entry (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
+unit_wedge_alarm_preflight_refuses_malformed_directive() {
+  local st out rc
+  st=$(make_wedge_preflight_case malformed)
+  out=$(PATH="$st/fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" FM_WEDGE_ALARM_CHANNEL=oascript \
+    bash -c '. "$1"; fm_afk_launch_wedge_alarm_preflight' _ "$LAUNCH" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "no active wedge-alarm channel is configured"; then
+    pass "wedge-alarm preflight: refuses entry on an unrecognized/malformed channel directive"
+  else
+    fail "wedge-alarm preflight: a malformed directive ('oascript') was accepted as reliable (rc=$rc): $out"
+  fi
+  rm -rf "$st"
+}
+
+# ---------------------------------------------------------------------------
 # E2E herdr: topology invariant.
 # ---------------------------------------------------------------------------
 e2e_herdr() {
@@ -959,6 +1018,9 @@ unit_clear_failure_aborts_entry
 unit_confirmed_absence_succeeds
 unit_incomplete_restore_retains_backup
 unit_flag_write_failure_aborts
+unit_wedge_alarm_preflight_refuses_without_channel
+unit_wedge_alarm_preflight_accepts_explicit_off
+unit_wedge_alarm_preflight_refuses_malformed_directive
 e2e_herdr
 e2e_tmux
 
