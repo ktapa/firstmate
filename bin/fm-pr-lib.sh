@@ -286,12 +286,13 @@ fm_pr_regular_destination_on_device_or_absent() {
 }
 
 # A task record's PR identity block - its single `pr=` line and any `pr_head=`
-# line - is terminal: fm_pr_metadata_identity_parse below refuses every other
-# key that follows it. That is what makes an append to a record whose merge poll
-# is already armed evident rather than silent, and it is the only structural
-# check the record carries, because a record must stay mutable across a
-# relaunch and so cannot be bound by hash the way the sidecar and the poll
-# source are.
+# line after it - is terminal. The parser below permits only that `pr_head=` and
+# the five named Relay keys after `pr=`; every other trailing key is invalid.
+# A `pr_head=` before `pr=` is outside the identity block and remains in place.
+# This rule makes an append to a record whose merge poll is already armed evident
+# rather than silent, and it is the only structural check the record carries,
+# because a record must stay mutable across a relaunch and so cannot be bound by
+# hash the way the sidecar and the poll source are.
 #
 # Every writer that rewrites or extends a task record validates the live record
 # before staging its own change, then passes both records here before publishing
