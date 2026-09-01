@@ -79,8 +79,10 @@ wedge_alarm_platform_default() {
 # line would otherwise pass this check as "reliable" while
 # wedge_alarm_notify's dispatch silently no-ops on it at runtime) - both are
 # the silent-alarm gaps this predicate exists to catch. A bare `command:` with
-# no payload falls into the same unrecognized-directive rejection as a typo:
-# wedge_alarm_via_command's own `[ -n "$cmd" ]` guard can never fire it, so
+# no payload, or one with only whitespace after the colon, falls into the same
+# unrecognized-directive rejection as a typo: `sh -c ' '` runs and exits 0
+# without doing anything, so wedge_alarm_via_command's own `[ -n "$cmd" ]`
+# guard - which treats whitespace as non-empty - can never catch it either;
 # treating it as reliable would be exactly the reassurance-that-doesn't-hold
 # gap this predicate exists to catch. osascript and herdr are not given the
 # same binary-presence check: unlike an empty command: payload, which can
@@ -97,7 +99,7 @@ wedge_alarm_reliable_channel_configured() {
       auto|default)
         [ -n "$(wedge_alarm_platform_default)" ] && found_real=0
         ;;
-      off|osascript|herdr|command:?*)
+      off|osascript|herdr|command:*[![:space:]]*)
         found_real=0
         ;;
       *)
