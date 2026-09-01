@@ -386,12 +386,12 @@ test_relaunch_refuses_a_preexisting_invalid_pr_suffix() {
   dir=$(new_case merge-poll-invalid-suffix rl49)
   add_ship_task "$dir" rl49 claude
   arm_merge_poll "$dir" rl49 "$url"
-  printf 'unaware_writer_key=unexpected\n' >> "$dir/home/state/rl49.meta"
+  printf 'x_unaware=unexpected\n' >> "$dir/home/state/rl49.meta"
   before=$(shasum -a 256 "$dir/home/state/rl49.meta" | awk '{print $1}')
 
   out=$(run_control "$dir" rl49 relaunch --note "must reject the anomalous record"); rc=$?
   [ "$rc" -ne 0 ] || fail "a relaunch should refuse a pre-existing invalid PR suffix"
-  printf '%s\n' "$out" | grep -q 'unaware_writer_key' \
+  printf '%s\n' "$out" | grep -q 'x_unaware' \
     || fail "the relaunch refusal did not name the offending metadata key: $out"
   after=$(shasum -a 256 "$dir/home/state/rl49.meta" | awk '{print $1}')
   [ "$before" = "$after" ] || fail "the refused relaunch normalised or otherwise changed the anomalous record"

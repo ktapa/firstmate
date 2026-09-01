@@ -307,7 +307,7 @@ fm_pr_meta_terminal_validate() {
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       pr=*) seen_pr=1 ;;
-      pr_head=*|x_*) ;;
+      pr_head=*|x_request=*|x_request_ts=*|x_followups=*|x_platform=*|x_reply_max_chars=*) ;;
       *)
         if [ "$seen_pr" -eq 1 ]; then
           key=${line%%=*}
