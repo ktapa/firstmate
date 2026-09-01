@@ -24,6 +24,7 @@ This is deliberate because the alarm fires only after a genuine max-defer wedge 
 ## Away-mode entry check
 
 On a platform with no built-in `auto` channel (verified live, 2026-09-01: Linux, no `osascript`, no `org.freedesktop.Notifications` D-Bus service), `bin/fm-afk-launch.sh start` and `start-native` refuse a fresh away-mode entry rather than let the captain walk away believing a channel exists that will never fire.
+The same refusal fires when every configured line is not one of the recognized directives above (`off`, `osascript`, `herdr`, `command:<cmd>`, or a resolving `auto`/`default`), so a typo or malformed line cannot pass as reliable while silently no-opping at alarm time.
 Configure `config/wedge-alarm` with a working `command:` directive, or set it to `off` to explicitly accept the durable marker as the only signal.
 `bin/fm-wedge-alarm-lib.sh`'s `wedge_alarm_reliable_channel_configured` owns this check; it is not consulted again on a refresh of an already-running daemon.
 
