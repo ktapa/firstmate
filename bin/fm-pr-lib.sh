@@ -338,8 +338,13 @@ fm_pr_meta_terminal_restage() {
 "
         ;;
       pr_head=*)
-        identity="$identity$line
+        if [ "$seen_pr" -eq 1 ]; then
+          identity="$identity$line
 "
+        else
+          rest="$rest$line
+"
+        fi
         ;;
       *)
         rest="$rest$line

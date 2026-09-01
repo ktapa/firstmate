@@ -378,6 +378,30 @@ test_relaunch_keeps_the_armed_merge_poll_recognised() {
   pass "fm-control relaunch: an armed merge poll survives replacing the agent"
 }
 
+test_relaunch_keeps_a_pre_pr_head_outside_the_identity_block() {
+  local dir meta staged out rc url=https://github.com/example/repo/pull/53
+  dir=$(new_case merge-poll-pre-pr-head rl53)
+  add_ship_task "$dir" rl53 claude
+  arm_merge_poll "$dir" rl53 "$url"
+  meta="$dir/home/state/rl53.meta"
+  staged="$dir/rl53.meta.staged"
+  {
+    printf 'pr_head=not-a-sha\n'
+    cat "$meta"
+  } > "$staged"
+  mv "$staged" "$meta"
+  assert_merge_poll_recognised "$dir" rl53 \
+    "the fixture with a pre-PR head should be recognised before the relaunch"
+
+  out=$(run_control "$dir" rl53 relaunch --note "preserve the parser's identity boundary"); rc=$?
+  expect_code 0 "$rc" "a relaunch with a pre-PR head should succeed"$'\n'"$out"
+  [ -n "$(meta_field "$dir" rl53 control_relaunch_tx)" ] \
+    || fail "the relaunch should have recorded its transaction, or this case no longer covers the writer"
+  assert_merge_poll_recognised "$dir" rl53 \
+    "the relaunch moved a pre-PR head into the identity block and disarmed the merge poll"
+  pass "fm-control relaunch: a pre-PR head stays outside the merge-poll identity block"
+}
+
 # A suffix that predates the relaunch is evidence of an unaware writer. The
 # relaunch must report it and leave the live record untouched instead of making
 # the anomalous record valid while preparing its own replacement.
@@ -1658,6 +1682,7 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_keeps_the_armed_merge_poll_recognised
+test_relaunch_keeps_a_pre_pr_head_outside_the_identity_block
 test_relaunch_refuses_a_preexisting_invalid_pr_suffix
 test_relaunch_refuses_its_own_preexisting_suffix_key
 test_relaunch_with_trace_context_keeps_the_merge_poll_recognised
