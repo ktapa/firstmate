@@ -847,6 +847,7 @@ SH
 unit_wedge_alarm_preflight_refuses_without_channel() {
   local st out rc
   st=$(make_wedge_preflight_case no-channel)
+  # shellcheck disable=SC2016 # $1 expands inside the bash -c subshell, not here.
   out=$(PATH="$st/fakebin:$PATH" FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
     env -u FM_WEDGE_ALARM_CHANNEL bash -c '. "$1"; fm_afk_launch_wedge_alarm_preflight' _ "$LAUNCH" 2>&1)
   rc=$?
