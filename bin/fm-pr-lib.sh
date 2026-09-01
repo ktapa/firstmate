@@ -285,6 +285,45 @@ fm_pr_regular_destination_on_device_or_absent() {
   [ ! -e "$path" ] || [ "$(fm_pr_file_device "$path")" = "$device" ]
 }
 
+# A task record's PR identity block - its single `pr=` line and any `pr_head=`
+# line - is terminal: fm_pr_metadata_identity_parse below refuses every other
+# key that follows it. That is what makes an append to a record whose merge poll
+# is already armed evident rather than silent, and it is the only structural
+# check the record carries, because a record must stay mutable across a
+# relaunch and so cannot be bound by hash the way the sidecar and the poll
+# source are.
+#
+# Every writer that rewrites or extends a task record therefore stages its
+# result and calls this on the staged file before publishing it, so a key the
+# writer owns can never land behind the identity block. This moves lines and
+# nothing else: no key is added, dropped, or rewritten, the relative order of
+# every other line is preserved, and a record carrying no `pr=` line is left
+# untouched. A record carrying more than one `pr=` line stays invalid, because
+# moving the duplicates does not merge them.
+fm_pr_meta_terminal_restage() {
+  local file=$1 line rest='' identity='' seen_pr=0
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      pr=*)
+        seen_pr=1
+        identity="$identity$line
+"
+        ;;
+      pr_head=*)
+        identity="$identity$line
+"
+        ;;
+      *)
+        rest="$rest$line
+"
+        ;;
+    esac
+  done < "$file"
+  [ "$seen_pr" -eq 1 ] || return 0
+  printf '%s%s' "$rest" "$identity" > "$file"
+}
+
 fm_pr_metadata_identity_parse() {
   local file=$1 line value pr_count=0 seen_pr=0 post_pr_invalid=0
   FM_PR_META_PROVIDER=

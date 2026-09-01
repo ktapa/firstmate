@@ -25,6 +25,8 @@ set -u
 . "$ROOT/bin/fm-control-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-trace-context-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-pr-lib.sh"
 
 CONTROL="$ROOT/bin/fm-control.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
@@ -329,6 +331,93 @@ test_relaunch_preserves_durable_task_metadata() {
   [ "$(meta_field "$dir" rl19 decisions_reviewed)" = 1 ] \
     || fail "the task decision state must survive relaunch"
   pass "fm-control relaunch: durable task metadata survives replacement launch publication"
+}
+
+# Record a PR on <id> and arm its merge poll exactly as bin/fm-pr-check.sh does:
+# the identity in the record, the same identity in the private sidecar, and the
+# registration binding the published poll to both.
+arm_merge_poll() {  # <case-dir> <id> <url>
+  local dir=$1 id=$2 url=$3 state
+  state="$dir/home/state"
+  {
+    printf 'pr=%s\n' "$url"
+    printf 'pr_head=%s\n' 0123456789abcdef0123456789abcdef01234567
+  } >> "$state/$id.meta"
+  fm_pr_url_parse "$url" || fail "the merge-poll fixture URL was invalid"
+  fm_pr_poll_prepare "$state" "$id" "$FM_PR_PROVIDER" "$url" "$FM_PR_HOST" \
+    "$FM_PR_PATH" "$FM_PR_NUMBER" "$ROOT/bin/fm-pr-poll.sh" \
+    || fail "could not prepare the merge-poll fixture"
+  fm_pr_poll_publish_prepared || fail "could not arm the merge-poll fixture"
+}
+
+# fm-watch.sh recognises a task's merge poll by capturing this snapshot; when the
+# capture fails it classifies the poll as an unauthenticated check, wakes with a
+# rejection, and never runs it. So this is the watcher's own gate, not a
+# restatement of the record's shape.
+assert_merge_poll_recognised() {  # <case-dir> <id> <message>
+  fm_pr_poll_snapshot_capture "$1/home/state" "$2" "$ROOT/bin/fm-pr-poll.sh" || fail "$3"
+}
+
+# A task that reaches a PR and is then relaunched keeps merge detection. The
+# replacement record is published whole, so every key this launch owns must land
+# ahead of the PR identity block the poll validates against.
+test_relaunch_keeps_the_armed_merge_poll_recognised() {
+  local dir out rc url=https://github.com/example/repo/pull/46
+  dir=$(new_case merge-poll rl46)
+  add_ship_task "$dir" rl46 claude
+  arm_merge_poll "$dir" rl46 "$url"
+  assert_merge_poll_recognised "$dir" rl46 "the fixture merge poll should be recognised before the relaunch"
+
+  out=$(run_control "$dir" rl46 relaunch --note "resuming after the PR was opened"); rc=$?
+  expect_code 0 "$rc" "a relaunch on a task with a recorded PR should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl46 pr)" = "$url" ] || fail "the task PR must survive relaunch"
+  [ -n "$(meta_field "$dir" rl46 control_relaunch_tx)" ] \
+    || fail "the relaunch should have recorded its transaction, or this case no longer covers the writer"
+  assert_merge_poll_recognised "$dir" rl46 \
+    "the relaunch left the merge poll unrecognised: the watcher would reject it as an unauthenticated check instead of polling for the merge"
+  pass "fm-control relaunch: an armed merge poll survives replacing the agent"
+}
+
+# The same guarantee on the path that also writes a carrier after the record is
+# rebuilt, which is a second writer of the same record in the same relaunch.
+test_relaunch_with_trace_context_keeps_the_merge_poll_recognised() {
+  local dir out rc url=https://github.com/example/repo/pull/47
+  dir=$(new_case merge-poll-trace rl47)
+  add_ship_task "$dir" rl47 claude
+  printf '%s\n' "$$" > "$dir/home/state/.lock"
+  printf '%s on\n' "$$" > "$dir/home/state/.trace-context-effective"
+  arm_merge_poll "$dir" rl47 "$url"
+  assert_merge_poll_recognised "$dir" rl47 "the fixture merge poll should be recognised before the relaunch"
+
+  out=$(run_control "$dir" rl47 relaunch --note "resuming with a carrier"); rc=$?
+  expect_code 0 "$rc" "a relaunch with trace context on should succeed"$'\n'"$out"
+  [ -n "$(meta_field "$dir" rl47 traceparent)" ] \
+    || fail "the relaunch should have recorded a carrier, or this case no longer covers the writer"
+  assert_merge_poll_recognised "$dir" rl47 \
+    "recording the carrier left the merge poll unrecognised: the watcher would reject it as an unauthenticated check instead of polling for the merge"
+  pass "fm-control relaunch: recording a carrier keeps an armed merge poll recognised"
+}
+
+# A promotion republishes the record too, and a scout that already recorded a PR
+# must not lose merge detection by being promoted.
+test_promotion_keeps_the_armed_merge_poll_recognised() {
+  local dir out rc url=https://github.com/example/repo/pull/48
+  dir=$(new_case merge-poll-promote rl48)
+  add_ship_task "$dir" rl48 claude
+  # fm-promote.sh promotes a scout, so this fixture is one that already reached
+  # a PR - a scout that opened one before implementation was authorised.
+  sed 's/^kind=ship$/kind=scout/' "$dir/home/state/rl48.meta" > "$dir/rl48.meta.scout"
+  mv "$dir/rl48.meta.scout" "$dir/home/state/rl48.meta"
+  arm_merge_poll "$dir" rl48 "$url"
+  assert_merge_poll_recognised "$dir" rl48 "the fixture merge poll should be recognised before the promotion"
+
+  out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
+    "$PROMOTE" rl48 --mode direct-PR --yolo off 2>&1); rc=$?
+  expect_code 0 "$rc" "promoting a scout that already recorded a PR should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl48 kind)" = ship ] || fail "the promotion should have rewritten kind"
+  assert_merge_poll_recognised "$dir" rl48 \
+    "the promotion left the merge poll unrecognised: the watcher would reject it as an unauthenticated check instead of polling for the merge"
+  pass "fm-promote: promoting a task that already recorded a PR keeps its merge poll recognised"
 }
 
 test_relaunch_serializes_concurrent_durable_metadata_publication() {
@@ -1479,6 +1568,9 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
+test_relaunch_keeps_the_armed_merge_poll_recognised
+test_relaunch_with_trace_context_keeps_the_merge_poll_recognised
+test_promotion_keeps_the_armed_merge_poll_recognised
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions

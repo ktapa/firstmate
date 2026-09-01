@@ -163,6 +163,15 @@ grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
   echo "mode=$MODE"
   echo "yolo=$YOLO"
 } >> "$TMP"
+# Keep the PR identity block terminal in the staged record (bin/fm-pr-lib.sh).
+# A promotion normally precedes the PR, but a scout that already recorded one
+# would otherwise have its merge poll refuse to validate after this rewrite.
+if ! fm_pr_meta_terminal_restage "$TMP"; then
+  rm -f -- "$TMP"
+  TMP=
+  echo "error: task record for $ID could not be prepared" >&2
+  exit 1
+fi
 if ! fm_backlog_atomic_transition publish "$TMP" "$META" "task record" "$STATE"; then
   rm -f -- "$TMP"
   TMP=
