@@ -17,6 +17,9 @@
 #   6. fm-spawn --relaunch refuses on its own: a live agent, a contradicting
 #      flag, an extra positional, or a backend that cannot prove the previous
 #      agent exited.
+#   7. A claude replacement keeps the Claude account its record names unless
+#      the caller explicitly moves it, and the recorded account never disarms
+#      an armed merge poll.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -376,6 +379,148 @@ test_relaunch_keeps_the_armed_merge_poll_recognised() {
   assert_merge_poll_recognised "$dir" rl46 \
     "the relaunch left the merge poll unrecognised: the watcher would reject it as an unauthenticated check instead of polling for the merge"
   pass "fm-control relaunch: an armed merge poll survives replacing the agent"
+}
+
+# --- Claude account durability ------------------------------------------------
+
+# make_store <case-dir> <name> -> an existing Claude login folder
+make_store() {
+  mkdir -p "$1/$2"
+  printf '%s\n' "$1/$2"
+}
+
+# The launch command the most recent replacement was started with.
+last_launch() {  # <case-dir>
+  grep 'encode launch-brief' "$1/fake/literal" | tail -1
+}
+
+# An automatic restart runs from whatever shell recovery happens to have, and
+# the home's setting may have changed since; neither may move the worker.
+test_relaunch_keeps_the_recorded_claude_account() {
+  local dir out rc alt main
+  dir=$(new_case account-keep rl60)
+  add_ship_task "$dir" rl60 claude
+  alt=$(make_store "$dir" claude-alt)
+  main=$(make_store "$dir" claude-main)
+  printf 'claude_config_dir=%s\n' "$alt" >> "$dir/home/state/rl60.meta"
+  mkdir -p "$dir/home/config"
+  printf '%s\n' "$main" > "$dir/home/config/claude-config-dir"
+
+  out=$(CLAUDE_CONFIG_DIR="$main" run_control "$dir" rl60 relaunch --note "recovering"); rc=$?
+  expect_code 0 "$rc" "a relaunch of a recorded claude account should succeed"$'\n'"$out"
+  assert_contains "$(last_launch "$dir")" "CLAUDE_CONFIG_DIR='$alt' " \
+    "the replacement did not launch on the recorded Claude account"
+  assert_not_contains "$(last_launch "$dir")" "$main" \
+    "the relaunching shell's or home's account leaked into the replacement"
+  [ "$(meta_field "$dir" rl60 claude_config_dir)" = "$alt" ] \
+    || fail "the relaunch must keep the recorded account, got '$(meta_field "$dir" rl60 claude_config_dir)'"
+  [ "$(grep -c '^claude_config_dir=' "$dir/home/state/rl60.meta")" = 1 ] \
+    || fail "the relaunch must rewrite the account key, not duplicate it"
+  assert_contains "$out" "claude_config_dir=$alt" "the outcome should name the account the replacement runs on"
+  pass "fm-control relaunch: a claude replacement keeps its recorded account whatever the caller's environment"
+}
+
+test_relaunch_override_moves_the_claude_account_durably() {
+  local dir out rc alt main
+  dir=$(new_case account-move rl61)
+  add_ship_task "$dir" rl61 claude
+  alt=$(make_store "$dir" claude-alt)
+  main=$(make_store "$dir" claude-main)
+  printf 'claude_config_dir=%s\n' "$main" >> "$dir/home/state/rl61.meta"
+
+  out=$(run_control "$dir" rl61 relaunch --claude-config-dir "$alt" --note "the current account is low"); rc=$?
+  expect_code 0 "$rc" "an explicit account move should relaunch"$'\n'"$out"
+  assert_contains "$(last_launch "$dir")" "CLAUDE_CONFIG_DIR='$alt' " \
+    "the explicit --claude-config-dir did not reach the replacement"
+  [ "$(meta_field "$dir" rl61 claude_config_dir)" = "$alt" ] || fail "the moved account must be recorded"
+
+  out=$(CLAUDE_CONFIG_DIR="$main" run_control "$dir" rl61 relaunch --note "routine restart"); rc=$?
+  expect_code 0 "$rc" "a later plain relaunch should succeed"$'\n'"$out"
+  assert_contains "$(last_launch "$dir")" "CLAUDE_CONFIG_DIR='$alt' " \
+    "a later automatic relaunch moved the worker back off the account it was moved to"
+
+  out=$(run_control "$dir" rl61 relaunch --claude-config-dir default --note "back to the default store"); rc=$?
+  expect_code 0 "$rc" "moving to the default store should relaunch"$'\n'"$out"
+  assert_not_contains "$(last_launch "$dir")" "CLAUDE_CONFIG_DIR=" \
+    "--claude-config-dir default must launch on Claude's own store"
+  [ "$(meta_field "$dir" rl61 claude_config_dir)" = default ] || fail "default must be recorded"
+  pass "fm-control relaunch: --claude-config-dir moves a worker's account and later restarts keep it"
+}
+
+test_relaunch_account_override_refuses_before_stopping() {
+  local dir out rc alt before after
+  dir=$(new_case account-refuse rl62)
+  add_ship_task "$dir" rl62 claude
+  alt=$(make_store "$dir" claude-alt)
+  before=$(shasum -a 256 "$dir/home/state/rl62.meta" | awk '{print $1}')
+
+  out=$(run_control "$dir" rl62 relaunch --harness codex --claude-config-dir "$alt" --note "x"); rc=$?
+  [ "$rc" -ne 0 ] || fail "an account override for a codex replacement must be refused"
+  assert_contains "$out" "applies only to a claude replacement" "the refusal must say why"
+
+  out=$(run_control "$dir" rl62 relaunch --claude-config-dir "$dir/missing" --note "x"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a missing login folder must be refused"
+  assert_contains "$out" "nothing was stopped" "the refusal must say the agent was left running"
+
+  out=$(run_control "$dir" rl62 relaunch --claude-config-dir relative/store --note "x"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a relative login folder must be refused"
+
+  out=$(run_control "$dir" rl62 exit --claude-config-dir "$alt"); rc=$?
+  [ "$rc" -ne 0 ] || fail "--claude-config-dir must be refused outside relaunch"
+
+  if grep -qx '/exit' "$dir/fake/literal"; then
+    fail "a refused account override stopped the running agent"
+  fi
+  after=$(shasum -a 256 "$dir/home/state/rl62.meta" | awk '{print $1}')
+  [ "$before" = "$after" ] || fail "a refused account override changed the task record"
+  pass "fm-control relaunch: an unusable or misapplied account override refuses before anything stops"
+}
+
+test_harness_switch_drops_the_claude_account() {
+  local dir out rc alt
+  dir=$(new_case account-switch rl63)
+  add_ship_task "$dir" rl63 claude
+  alt=$(make_store "$dir" claude-alt)
+  printf 'claude_config_dir=%s\n' "$alt" >> "$dir/home/state/rl63.meta"
+  printf 'codex' > "$dir/fake/becomes"
+
+  out=$(run_control "$dir" rl63 relaunch --harness codex --note "switching runtime"); rc=$?
+  expect_code 0 "$rc" "a harness switch off claude should relaunch"$'\n'"$out"
+  if grep -q '^claude_config_dir=' "$dir/home/state/rl63.meta"; then
+    fail "a codex replacement must not keep a Claude account in its record"
+  fi
+  assert_not_contains "$(last_launch "$dir")" "CLAUDE_CONFIG_DIR=" "codex must not receive a Claude account"
+  pass "fm-control relaunch: switching off claude drops the Claude account from the record"
+}
+
+# The new launch-time key must never land inside the PR identity block, or the
+# watcher stops recognising the task's merge poll (bin/fm-pr-lib.sh).
+test_claude_account_keeps_the_armed_merge_poll_recognised() {
+  local dir out rc alt url=https://github.com/example/repo/pull/64
+  dir=$(new_case account-merge-poll rl64)
+  add_ship_task "$dir" rl64 claude
+  alt=$(make_store "$dir" claude-alt)
+
+  # The launch owner itself writes the key: a record from before the key existed
+  # resolves the account afresh and records it.
+  out=$(CLAUDE_CONFIG_DIR="$alt" run_control "$dir" rl64 relaunch --note "before the PR"); rc=$?
+  expect_code 0 "$rc" "the first relaunch should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl64 claude_config_dir)" = "$alt" ] \
+    || fail "the launch owner did not record the account, so this case no longer covers the key"
+
+  arm_merge_poll "$dir" rl64 "$url"
+  assert_merge_poll_recognised "$dir" rl64 \
+    "a record carrying claude_config_dir did not arm its merge poll"
+  fm_pr_metadata_identity_parse "$dir/home/state/rl64.meta" \
+    || fail "a record carrying claude_config_dir failed the PR identity parse"
+
+  out=$(run_control "$dir" rl64 relaunch --note "after the PR"); rc=$?
+  expect_code 0 "$rc" "a relaunch after the PR should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" rl64 claude_config_dir)" = "$alt" ] || fail "the account must survive the relaunch"
+  [ "$(meta_field "$dir" rl64 pr)" = "$url" ] || fail "the PR must survive the relaunch"
+  assert_merge_poll_recognised "$dir" rl64 \
+    "relaunching a task with a Claude account disarmed its merge poll"
+  pass "fm-control relaunch: a recorded Claude account keeps the merge poll armed before and after relaunch"
 }
 
 test_relaunch_keeps_a_pre_pr_head_outside_the_identity_block() {
@@ -1682,6 +1827,11 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_keeps_the_armed_merge_poll_recognised
+test_relaunch_keeps_the_recorded_claude_account
+test_relaunch_override_moves_the_claude_account_durably
+test_relaunch_account_override_refuses_before_stopping
+test_harness_switch_drops_the_claude_account
+test_claude_account_keeps_the_armed_merge_poll_recognised
 test_relaunch_keeps_a_pre_pr_head_outside_the_identity_block
 test_relaunch_refuses_a_preexisting_invalid_pr_suffix
 test_relaunch_refuses_its_own_preexisting_suffix_key
