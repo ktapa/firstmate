@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--claude-config-dir <dir|default>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--claude-config-dir <dir|default>] [--backend <name>]
+#        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--claude-config-dir <dir|default>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
 #   per task at intake (AGENTS.md section 7); data/projects.md holds the captain's
@@ -16,7 +16,7 @@
 #   loud one-line deviation notice is printed and the spawn continues.
 #   no-mistakes-prod-only is a registry policy rather than a task mode and is
 #   refused as a flag value.
-#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
+#        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>] [--claude-config-dir <dir|default>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
 #   the launch half of the control plane (bin/fm-control.sh relaunch), which
@@ -26,18 +26,30 @@
 #   backend, kind, project or home, worktree, endpoint - comes from the task's
 #   validated state/<id>.meta, so --backend, --scout, --secondmate, a project
 #   positional, and batch pairs are all refused alongside it; only harness,
-#   model, and effort may change, which is what makes a harness switch one
-#   ordinary relaunch. It refuses unless the recorded endpoint is positively
-#   agent-free on a backend with a recovery-grade agent-state classifier (tmux
-#   or herdr), refuses unless the endpoint's shell is sitting in the recorded
-#   worktree, and clears the previous harness's per-task wiring before arming
-#   the new incarnation.
+#   model, effort, and the Claude account may change, which is what makes a
+#   harness switch one ordinary relaunch. It refuses unless the recorded
+#   endpoint is positively agent-free on a backend with a recovery-grade
+#   agent-state classifier (tmux or herdr), refuses unless the endpoint's shell
+#   is sitting in the recorded worktree, and clears the previous harness's
+#   per-task wiring before arming the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
 #   from that harness's launch rather than guessed.
+#   --claude-config-dir <dir|default> is the per-spawn Claude account override
+#   (the login folder a claude launch runs under as CLAUDE_CONFIG_DIR). It is
+#   refused unless the resolved harness is claude, and refused for a remote
+#   secondmate route, whose account comes from that remote home's own config.
+#   Without it, a claude launch reuses the task's recorded claude_config_dir=
+#   on a relaunch or secondmate respawn, else reads the target home's
+#   config/claude-config-dir (the secondmate's home for --secondmate, this home
+#   otherwise), else forwards this process's own CLAUDE_CONFIG_DIR, else uses
+#   Claude's default store. Every source is validated before any endpoint
+#   exists, and the resolved value is recorded for the next relaunch.
+#   docs/configuration.md "Claude account" owns that contract, and
+#   bin/fm-claude-account-lib.sh owns the validation.
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
@@ -150,7 +162,7 @@
 # Batch dispatch: pass one or more `id=repo` pairs instead of a single <id> <project>, e.g.
 #     fm-spawn.sh fix-a-k3=projects/foo add-b-q7=projects/bar [--scout]
 #   Each pair re-execs this script in single-task mode, so the single path stays the only
-#   source of truth; shared --scout/--harness/--model/--effort/--backend/--mode/--yolo
+#   source of truth; shared --scout/--harness/--model/--effort/--claude-config-dir/--backend/--mode/--yolo
 #   applies to every pair. A ship batch therefore carries one delivery contract, and each
 #   pair still checks it against its own brief; a batch spanning modes is two invocations.
 #   If config/crew-dispatch.json exists, shared --harness is required for crewmate
@@ -303,6 +315,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-claude-account-lib.sh
+. "$SCRIPT_DIR/fm-claude-account-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -318,6 +332,7 @@ BACKEND_ARG=
 MODE=
 YOLO=
 TRACEPARENT_ARG=
+CLAUDE_ACCOUNT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -325,6 +340,7 @@ BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
+CLAUDE_ACCOUNT_SET=0
 RELAUNCH=0
 POS=()
 want_value=
@@ -341,6 +357,7 @@ for a in "$@"; do
       mode) MODE=$a; MODE_SET=1 ;;
       yolo) YOLO=$a; YOLO_SET=1 ;;
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
+      claude-config-dir) CLAUDE_ACCOUNT_ARG=$a; CLAUDE_ACCOUNT_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -364,6 +381,8 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
+    --claude-config-dir) want_value=claude-config-dir ;;
+    --claude-config-dir=*) CLAUDE_ACCOUNT_ARG=${a#--claude-config-dir=}; CLAUDE_ACCOUNT_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -375,6 +394,7 @@ done
 [ "$MODE_SET" -eq 0 ] || [ -n "$MODE" ] || { echo "error: --mode requires a non-empty value" >&2; exit 1; }
 [ "$YOLO_SET" -eq 0 ] || [ -n "$YOLO" ] || { echo "error: --yolo requires a non-empty value" >&2; exit 1; }
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
+[ "$CLAUDE_ACCOUNT_SET" -eq 0 ] || [ -n "$CLAUDE_ACCOUNT_ARG" ] || { echo "error: --claude-config-dir requires a non-empty value" >&2; exit 1; }
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -472,6 +492,14 @@ spawn_remote_secondmate() {
     fm_lock_release "$registry_lock" || true
     fm_lock_release "$SPAWN_TASK_LOCK" || true
     echo "error: remote secondmate spawn accepts no local home positional argument" >&2
+    return 2
+  fi
+  # A folder named here would be a path on this host, not the remote one. The
+  # remote home's own config/claude-config-dir chooses its account instead.
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 1 ]; then
+    fm_lock_release "$registry_lock" || true
+    fm_lock_release "$SPAWN_TASK_LOCK" || true
+    echo "error: --claude-config-dir is not accepted for remote secondmate $id; set config/claude-config-dir in its remote home instead" >&2
     return 2
   fi
   if [ -n "$HARNESS_ARG" ]; then
@@ -943,6 +971,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
+  [ "$CLAUDE_ACCOUNT_SET" -eq 0 ] || shared_args+=(--claude-config-dir "$CLAUDE_ACCOUNT_ARG")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
@@ -1344,6 +1373,10 @@ esac
 # secondmate whose supervision cycle could never be armed.
 if [ "$KIND" = secondmate ] && [ "$HARNESS" = muse ]; then
   echo "error: muse is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
+  exit 1
+fi
+if [ "$CLAUDE_ACCOUNT_SET" -eq 1 ] && [ "$HARNESS" != claude ]; then
+  echo "error: --claude-config-dir applies only to claude launches; this spawn resolved harness '${HARNESS:-unknown}'" >&2
   exit 1
 fi
 
@@ -1799,6 +1832,61 @@ if [ "$KIND" = ship ]; then
      && [ "$(delivery_rigor_rank "$MODE")" -lt "$(delivery_rigor_rank "$STANDING_MODE")" ]; then
     echo "notice: $ID ships mode=$MODE while the standing posture for $PROJ_NAME is $STANDING_MODE - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state" >&2
   fi
+fi
+
+# Claude account (docs/configuration.md "Claude account"), resolved before any
+# endpoint exists so a refusal costs nothing to unwind. A relaunch or a
+# secondmate respawn reuses the account its task record names, so no automatic
+# restart moves a worker to another account; only an explicit override does.
+CLAUDE_ACCOUNT=
+if [ "$HARNESS" = claude ]; then
+  CLAUDE_ACCOUNT_SOURCE=
+  CLAUDE_ACCOUNT_PRIOR_META=
+  if [ "$RELAUNCH" -eq 1 ]; then
+    CLAUDE_ACCOUNT_PRIOR_META=$RELAUNCH_META
+  elif [ "$KIND" = secondmate ] && { [ -e "$STATE/$ID.meta" ] || [ -L "$STATE/$ID.meta" ]; }; then
+    fm_backlog_record_present "$STATE/$ID.meta" "task record" "$STATE" || {
+      echo "error: secondmate task record is unsafe: $FM_BACKLOG_TRANSITION_ERROR" >&2
+      exit 1
+    }
+    # Only a record of this same home carries its account forward.
+    if [ "$(fm_meta_get "$STATE/$ID.meta" home)" = "$PROJ_ABS" ]; then
+      CLAUDE_ACCOUNT_PRIOR_META="$STATE/$ID.meta"
+    fi
+  fi
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 1 ]; then
+    CLAUDE_ACCOUNT=$CLAUDE_ACCOUNT_ARG
+    CLAUDE_ACCOUNT_SOURCE=--claude-config-dir
+  elif [ -n "$CLAUDE_ACCOUNT_PRIOR_META" ]; then
+    claude_account_rc=0
+    fm_claude_account_recorded "$CLAUDE_ACCOUNT_PRIOR_META" || claude_account_rc=$?
+    case "$claude_account_rc" in
+      0)
+        CLAUDE_ACCOUNT=$FM_CLAUDE_ACCOUNT_RECORDED
+        CLAUDE_ACCOUNT_SOURCE="task $ID's recorded $FM_CLAUDE_ACCOUNT_META_KEY"
+        ;;
+      2) ;;
+      *) exit 1 ;;
+    esac
+  fi
+  if [ -z "$CLAUDE_ACCOUNT_SOURCE" ]; then
+    if [ "$KIND" = secondmate ]; then
+      CLAUDE_ACCOUNT_CONFIG="$PROJ_ABS/config"
+    else
+      CLAUDE_ACCOUNT_CONFIG=$CONFIG
+    fi
+    CLAUDE_ACCOUNT=$(fm_claude_account_home_setting "$CLAUDE_ACCOUNT_CONFIG") || exit 1
+    if [ -n "$CLAUDE_ACCOUNT" ]; then
+      CLAUDE_ACCOUNT_SOURCE="$CLAUDE_ACCOUNT_CONFIG/$FM_CLAUDE_ACCOUNT_CONFIG_FILE"
+    elif [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+      CLAUDE_ACCOUNT=$CLAUDE_CONFIG_DIR
+      CLAUDE_ACCOUNT_SOURCE="this firstmate's own CLAUDE_CONFIG_DIR"
+    else
+      CLAUDE_ACCOUNT=default
+      CLAUDE_ACCOUNT_SOURCE=default
+    fi
+  fi
+  fm_claude_account_check "$CLAUDE_ACCOUNT" "$CLAUDE_ACCOUNT_SOURCE" || exit 1
 fi
 
 BRIEF_DIR_REAL=$(cd "$(dirname "$BRIEF")" && pwd -P)
@@ -2847,7 +2935,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort claude_config_dir busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -2865,6 +2953,8 @@ preserve_relaunch_meta() {
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  # Only a claude launch records its account, so a harness switch drops it.
+  [ -z "$CLAUDE_ACCOUNT" ] || echo "$FM_CLAUDE_ACCOUNT_META_KEY=$CLAUDE_ACCOUNT"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
@@ -2989,13 +3079,12 @@ case "$HARNESS" in
 esac
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not
 # inherit firstmate's current environment, so a bare `claude` in the pane falls
-# back to the default ~/.claude store even when firstmate itself runs under a
-# different CLAUDE_CONFIG_DIR (for example a work-vs-personal subscription split).
-# Forward firstmate's own resolved store onto the claude launch so the crewmate
-# uses the same credential/config firstmate is authenticated with. Only when set;
-# an unset value is the single-store default and needs no prefix.
-if [ "$HARNESS" = claude ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
-  LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_CONFIG_DIR") $LAUNCH"
+# back to the default ~/.claude store whatever account this launch resolved
+# above (for example a home on a second Claude account). Name the resolved
+# login folder on the launch itself. `default` adds no prefix: Claude's own
+# default store is not the same as naming ~/.claude, which moves .claude.json.
+if [ "$HARNESS" = claude ] && [ "$CLAUDE_ACCOUNT" != default ]; then
+  LAUNCH="CLAUDE_CONFIG_DIR=$(shell_quote "$CLAUDE_ACCOUNT") $LAUNCH"
 fi
 if [ "$KIND" = secondmate ]; then
   sq_home=$(shell_quote "$PROJ_ABS")

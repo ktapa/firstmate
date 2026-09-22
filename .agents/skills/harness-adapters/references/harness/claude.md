@@ -12,8 +12,10 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
+| Account | `CLAUDE_CONFIG_DIR=<login folder>` launch prefix, absent for Claude's own default store; `../../../docs/configuration.md` "Claude account" owns which folder a launch uses and `--claude-config-dir` moves a worker. |
 
 Fresh-worktree or first-machine launch may show trust or bypass-permissions confirmation.
+A login folder is a separate store: on 2.1.278 a named `CLAUDE_CONFIG_DIR` also holds its own `.claude.json` instead of `~/.claude.json`, so a folder never used interactively starts at login and onboarding.
 Inspect within about 20 seconds, accept the required choice with `FM_HOME=<active-home> ../../../bin/fm-send.sh <window> --key Enter` unless already bound, and verify instructions started.
 
 ## Composer ghost

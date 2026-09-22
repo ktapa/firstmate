@@ -331,6 +331,32 @@ The Kimi installer requires an existing regular non-symlink `~/.kimi-code/config
 Its `remove` action excises only the marker-delimited Firstmate region and removes Firstmate's hook files.
 For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected executable with `-e` pointed at the secondmate home's own tracked `.pi/extensions/fm-primary-pi-watch.ts` and `.pi/extensions/fm-primary-turnend-guard.ts`, both already present from the secondmate home's git worktree.
 
+## Claude account (config/claude-config-dir)
+
+Claude Code keeps each account's login and settings in the folder named by `CLAUDE_CONFIG_DIR`, and uses its own default store when that variable is unset.
+Worker terminals are created by a long-lived session daemon, so a Claude worker runs on whichever folder its launch names rather than on the environment of the firstmate that started it.
+The local, gitignored `config/claude-config-dir` file lets each firstmate home choose that folder for the Claude agents it launches, for example a secondmate on a second Claude account while the main home stays on the first.
+Its first non-empty line that does not start with `#` is read, with surrounding whitespace trimmed, and must be either an absolute path to an existing directory or `default`.
+`default` pins Claude's own default store, which is not the same as naming `~/.claude`, because Claude moves its `.claude.json` into any folder named explicitly.
+An absent file, or one with no such line, keeps the earlier behavior described below.
+Log in once with `CLAUDE_CONFIG_DIR=<folder> claude` before pointing a home at a new folder, so a worker does not start on a login prompt.
+
+A claude launch chooses its folder in this order:
+
+1. An explicit per-worker `--claude-config-dir <folder|default>` passed to `bin/fm-spawn.sh`, or to `bin/fm-control.sh <id> relaunch` to move a running worker to another account.
+2. On a relaunch or a secondmate respawn, the folder recorded for that task by its previous launch.
+3. The target home's `config/claude-config-dir`: the secondmate's own home for a `--secondmate` launch, and the launching home for a crewmate or scout.
+4. The `CLAUDE_CONFIG_DIR` of the firstmate that runs the launch.
+5. Claude's own default store.
+
+Whichever source applies must name an absolute, existing directory or `default`; otherwise the launch refuses before any worker terminal exists rather than starting on another account.
+The resolved value is recorded as `claude_config_dir=` in the task record, so every relaunch and automatic recovery keeps the same account whatever environment the restarting process has, and a later change to a home's file applies to new launches only.
+A per-worker move therefore also persists through later restarts until it is moved again.
+Switching a worker off Claude drops its recorded account, and a later switch back resolves one afresh.
+The override is refused for any other harness and for a remote secondmate, whose account is the remote home's own `config/claude-config-dir`.
+This file is local to each home and is deliberately not part of secondmate inherited configuration, because each home owns its own account.
+`quota-axi` reads a Claude account's usage from whichever folder its own `CLAUDE_CONFIG_DIR` names, so run it with the same folder to check a specific account.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
