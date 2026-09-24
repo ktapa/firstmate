@@ -793,6 +793,22 @@ FM_CMUX_CLAUDE_COMPOSER_LIVE=1 bin/fm-test-run.sh tests/fm-cmux-claude-composer-
 That guard still addresses the worker by task selector, so it no longer reaches the typed submit path and is not a current refresh entry point for this guarantee.
 The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 
+## Claude connector suppression
+
+Verified 2026-09-24 on claude 2.1.282 against the personal account (`~/.claude`), which has claude.ai connectors.
+The prompt asks the agent to list its tools whose names start with `mcp__claude_ai_`.
+
+```
+claude -p "<prompt>" --model haiku
+mcp__claude_ai_Claude_Docs__batch
+mcp__claude_ai_Claude_Docs__create
+...
+ENABLE_CLAUDEAI_MCP_SERVERS=false claude -p "<prompt>" --model haiku
+NONE
+```
+
+The portable regression is `tests/fm-spawn-claude-account.test.sh`; `docs/configuration.md` "Claude connectors" owns the behavior.
+
 ## Codex App host tools
 
 A reusable Desktop host-tool smoke ran on 2026-07-06 against Codex Desktop bundle version 26.623.101652, build 4674, bundle id `com.openai.codex`.

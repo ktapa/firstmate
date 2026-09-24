@@ -12,6 +12,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
+| Connectors | `ENABLE_CLAUDEAI_MCP_SERVERS=false` launch prefix on every unattended launch; `../../../docs/configuration.md` "Claude connectors" owns it. |
 | Account | `CLAUDE_CONFIG_DIR=<login folder>` launch prefix, absent for Claude's own default store; `../../../docs/configuration.md` "Claude account" owns which folder a launch uses and `--claude-config-dir` moves a worker. |
 
 Fresh-worktree or first-machine launch may show trust or bypass-permissions confirmation.
