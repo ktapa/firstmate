@@ -357,6 +357,16 @@ The override is refused for any other harness and for a remote secondmate, whose
 This file is local to each home and is deliberately not part of secondmate inherited configuration, because each home owns its own account.
 `quota-axi` reads a Claude account's usage from whichever folder its own `CLAUDE_CONFIG_DIR` names, so run it with the same folder to check a specific account.
 
+## Claude connectors
+
+Claude Code fetches connectors (MCP servers such as Supabase, Vercel, or Gmail) from the signed-in claude.ai account.
+Every claude launch that `bin/fm-spawn.sh` performs for a crewmate, scout, or secondmate, including relaunch and recovery respawns, carries `ENABLE_CLAUDEAI_MCP_SERVERS=false` as a launch prefix, so no unattended agent holds such a connector.
+Claude Code's MCP documentation defines that variable as equivalent to `disableClaudeAiConnectors: true` for the session.
+The control is on the launch itself and independent of the account folder, so it covers every account and needs no settings edit.
+The captain's own primary session is not launched by `fm-spawn` and keeps its connectors.
+A remote secondmate runs `bin/fm-spawn.sh` on its own remote home, so it inherits the same prefix and has no separate launch line.
+`docs/verification/runtime-backends.md` "Claude connector suppression" records the dated live check.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.

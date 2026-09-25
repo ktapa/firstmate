@@ -1260,7 +1260,12 @@ launch_template() {
     # does NOT suppress the interactive ghost text (verified empirically), so the env
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
-    claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # ENABLE_CLAUDEAI_MCP_SERVERS=false keeps claude.ai account connectors (MCP
+    # servers fetched from the signed-in account) off for every unattended claude
+    # this script launches, so no worker or secondmate holds a production-capable
+    # connector. It rides the launch itself, covering relaunch and recovery, and
+    # never reaches the captain's own primary session.
+    claude) printf '%s' 'ENABLE_CLAUDEAI_MCP_SERVERS=false CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'

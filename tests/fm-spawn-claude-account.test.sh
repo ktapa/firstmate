@@ -322,4 +322,32 @@ test_unusable_accounts_are_refused_before_any_endpoint
 test_override_is_refused_for_a_remote_secondmate
 test_unreadable_home_setting_is_refused
 
+# --- claude.ai connectors stay off for every unattended launch ----------------
+
+test_connectors_are_off_for_every_unattended_claude_launch() {
+  local id=conn-off-r1 sm out rc
+  make_case connectors claude "$id" conn-off-r2 conn-off-r3
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" conn-off-r3
+
+  out=$(run_ship_spawn "$id" "$PROJ_DIR"); rc=$?
+  expect_code 0 "$rc" "crewmate spawn should succeed"$'\n'"$out"
+  assert_contains "$(cat "$LAUNCH_LOG")" "ENABLE_CLAUDEAI_MCP_SERVERS=false " "crewmate launch must disable claude.ai connectors"
+
+  out=$(run_spawn conn-off-r2 "$PROJ_DIR" --scout); rc=$?
+  expect_code 0 "$rc" "scout spawn should succeed"$'\n'"$out"
+  assert_contains "$(cat "$LAUNCH_LOG")" "ENABLE_CLAUDEAI_MCP_SERVERS=false " "scout launch must disable claude.ai connectors"
+
+  out=$(run_spawn conn-off-r3 "$sm" --harness claude --secondmate); rc=$?
+  expect_code 0 "$rc" "secondmate spawn should succeed"$'\n'"$out"
+  assert_contains "$(cat "$LAUNCH_LOG")" "ENABLE_CLAUDEAI_MCP_SERVERS=false " "secondmate launch must disable claude.ai connectors"
+
+  out=$(run_spawn conn-off-r3 --secondmate); rc=$?
+  expect_code 0 "$rc" "secondmate respawn should succeed"$'\n'"$out"
+  assert_contains "$(cat "$LAUNCH_LOG")" "ENABLE_CLAUDEAI_MCP_SERVERS=false " "a respawn must disable claude.ai connectors"
+  pass "crewmate, scout, secondmate, and respawn launches all disable claude.ai connectors"
+}
+
+test_connectors_are_off_for_every_unattended_claude_launch
+
 echo "# all fm-spawn-claude-account tests passed"
