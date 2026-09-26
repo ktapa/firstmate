@@ -21,6 +21,11 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAUNCH="$ROOT/bin/fm-afk-launch.sh"
+# Away-mode entry refuses on a platform with no built-in wedge-alarm channel
+# (fm_afk_launch_wedge_alarm_preflight), which is every Linux host. Cases that
+# exercise the entry lifecycle acknowledge the marker-only signal explicitly;
+# the preflight's own cases set or unset this variable themselves.
+export FM_WEDGE_ALARM_CHANNEL=off
 START="$ROOT/bin/fm-afk-start.sh"
 CONTRACT="$ROOT/bin/fm-afk-contract.sh"
 # The daemon paths refuse on a Pi primary, so pin a daemon-running harness for
