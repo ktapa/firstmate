@@ -249,6 +249,12 @@ Do not add model-specific versions of that policy.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
 
+The WSL host has a fixed memory cap shared by every agent, browser, and dev server; exhausting it kills the whole distro, Herdr, and every session at once (incident 2026-09-28).
+Keep at most six agents running at once across all homes.
+Run at most one `next dev` server at a time; check with `pgrep -af next-server` first and reuse or stop the one already running.
+Start it with `NODE_OPTIONS=--max-old-space-size=2048` and stop it when the task that started it ends.
+Run at most one headless browser session at a time; check with `pgrep -af chrome-linux64` first and reuse or close the one already running.
+
 ## 5. Recovery
 
 After the one session-start digest, reconcile reality with durable records before taking new work.
