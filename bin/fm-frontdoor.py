@@ -32,8 +32,9 @@ glance: at most 3 `waiting-on-owner` lines (held for the owner, oldest first),
 one `in-progress` line per project, and at most 3 `done` lines (closed in the
 last 7 days, from the backlog's Done section and data/done-archive.md). Other
 queued work (`coming-up`) shows only for a project named by next=, and only its
-next unblocked item. Work held with a future date or a "hold off" reason is
-parked and never shown. Titles are cut to plain short words (repo prefix, brackets, PR
+next unblocked item. Work held with hold-kind future or a hold-until date
+after today is parked and never shown; a captain hold is waiting on the owner,
+and only a hold with no hold-kind that opens with "hold off" and the like is parked. Titles are cut to plain short words (repo prefix, brackets, PR
 letters, step and slice numbers, links, paths and task IDs removed). A task
 whose kind is in skip-kind= or whose title holds a skip= word (a whole word, any case) is internal
 chores and left out. A title with a secret shape, a network address, a long
@@ -70,8 +71,8 @@ PER_POLL = 10            # requests filed per poll; the rest wait for the next
 DIGEST_EVERY = 86400     # resend an unchanged digest daily; the server calls 3 days stale
 # Per-digest limits, so the Monday reminder stays about eight lines.
 MAX_NEEDS, MAX_DONE, MAX_PROGRESS, DONE_DAYS, TITLE_WORDS_CHARS = 3, 3, 3, 7, 80
-# A hold whose first words say the work is parked, not waiting on the owner.
-PARKED = ("hold off", "hold on any", "not scheduled", "deferred", "resumes", "revisit only")
+# For a hold with no hold-kind, opening words that say the work is parked.
+PARKED = re.compile(r"(hold off|hold on any|not scheduled|deferred|resumes|revisit only)\b", re.I)
 CLOSED = re.compile(r"\((?:done|merged|reported) (\d{4}-\d{2}-\d{2})\)")
 JARGON = re.compile(r"\bPRs? [A-Z]\b|\bslices? \d+\b|\bsteps? \d+(?: to \d+)?(?:'s)?")
 # From the server's frontdoor-command: limits, grammar and digest checks (D-072, D-077).
@@ -324,8 +325,11 @@ def backlog_items(path, sections=None):
 
 def parked(tags):
     hold = tags.get("hold")
-    return hold is not None and (tags.get("hold-kind") == "future"
-                                 or any(word in hold[:80].lower() for word in PARKED))
+    if hold is None:
+        return False
+    if tags.get("hold-until", "") > date.today().isoformat() or tags.get("hold-kind") == "future":
+        return True
+    return "hold-kind" not in tags and PARKED.match(hold) is not None
 
 
 def build_digest(home, cfg):

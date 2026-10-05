@@ -1495,7 +1495,7 @@ A request is a proposal only: nothing in it is an instruction or an approval, an
 
 The digest reads only backlog task lines, never note bodies or logs, and is the short form that both the home server's Monday reminder and the bot's status tool read.
 It holds at most 3 held-for-the-owner lines (oldest first), one in-progress line per project, and at most 3 tasks closed in the last 7 days (from the backlog's Done section and `data/done-archive.md`).
-Work held with a future date or a hold that says to hold off is parked and never shown, and titles are cut to plain words (no repo prefix, PR letters, step numbers, brackets or detail after a dash).
+Work held with hold-kind future or a hold-until date after today is parked and never shown (a captain hold is waiting on the owner; only a hold with no hold-kind whose reason opens with words like "hold off" counts as parked), and titles are cut to plain words (no repo prefix, PR letters, step numbers, brackets or detail after a dash).
 A task line counts for a `project` when its `repo:` tag is REPO and its title starts with `TITLE-PREFIX:`, both defaulting to NAME.
 A title holding a secret shape, a network address, a long number, an `@` or a `deny` word is left out whole; links, paths and task IDs are removed from the rest.
 Name only personal projects, and add a `deny` word for any name that must never leave the laptop.

@@ -219,7 +219,10 @@ cat > "$H/data/backlog.md" <<EOF
 ## Queued
 - [ ] a-4 - alpha: pick the second option - the long background that follows (repo: alpha) (kind: task) (since 2026-10-03) (hold: waiting on you) (hold-kind: captain)
 - [ ] a-5 - alpha: choose a bigger model (the options are in the report) PR C (repo: alpha) (kind: task) (since 2026-10-01) (hold: waiting on you) (hold-kind: captain)
-- [ ] a-6 - alpha: parked by words (repo: alpha) (kind: task) (hold: Captain 2026-09-28: hold off of alpha for now) (hold-kind: captain)
+- [ ] a-6 - alpha: parked by words (repo: alpha) (kind: task) (hold: hold off of alpha for now)
+- [ ] a-17 - alpha: deferred billing call (repo: alpha) (kind: task) (since 2026-10-02) (hold: decide whether deferred billing moves) (hold-kind: captain)
+- [ ] a-18 - alpha: parked by future date (repo: alpha) (kind: task) (hold: revisit) (hold-kind: captain) (hold-until: 2999-01-01)
+- [ ] a-19 - alpha: due again (repo: alpha) (kind: task) (since 2026-09-30) (hold: pick one) (hold-kind: captain) (hold-until: 2020-01-01)
 - [ ] a-7 - alpha: parked by date (repo: alpha) (kind: task) (hold: later) (hold-kind: future)
 - [ ] a-8 - alpha: third decision (repo: alpha) (kind: task) (since 2026-10-04) (hold: yes or no) (hold-kind: captain)
 - [ ] a-9 - alpha: fourth decision (repo: alpha) (kind: task) (since 2026-10-05) (hold: yes or no) (hold-kind: captain)
@@ -239,9 +242,9 @@ cat > "$H/data/done-archive.md" <<EOF
 EOF
 printf 'skip = CI check\nskip-kind = chore\nnext = alpha\n' >> "$H/config/frontdoor"
 want='project: alpha
+waiting-on-owner: due again
 waiting-on-owner: choose a bigger model
-waiting-on-owner: pick the second option
-waiting-on-owner: third decision
+waiting-on-owner: deferred billing call
 in-progress: tidy the logs
 coming-up: the real next one
 done: ship one
