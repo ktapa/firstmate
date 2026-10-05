@@ -1474,6 +1474,8 @@ The Hermes front door brings requests the owner shapes with a Hermes bot in Slac
 It runs over one SSH account on the owner's server whose forced command allows only `list`, `get`, `ack`, `put-digest` and `put-reply`.
 `bin/fm-frontdoor.py` is the laptop side and its header owns the commands; the server's own setup guide owns the account and its key.
 It is off unless `config/frontdoor` exists.
+This is part 1 of 2: it covers polling requests and queueing replies.
+The digest (`put-digest`, the personal-project allowlist and the secret, link and address pre-check) lands in the stacked follow-up change, so until then nothing calls `put-digest`.
 
 ```sh
 host = server-name                    # required: the server, as ssh reaches it

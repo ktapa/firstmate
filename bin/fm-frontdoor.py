@@ -7,6 +7,10 @@ command (the server repo's frontdoor-command) owns the grammar, the limits and
 the exit statuses; this file matches them and is the only firstmate code that
 talks to it.
 
+This change is part 1 of 2: it covers polling requests and queueing replies.
+`put-digest` and the status digest land in the stacked follow-up change, so
+until then nothing calls `put-digest`.
+
 Usage:
   fm-frontdoor.py poll           file each new request into the captain inbox
                                  and ack it
