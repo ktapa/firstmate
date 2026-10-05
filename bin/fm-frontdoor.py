@@ -359,7 +359,7 @@ def main(argv):
         elif command in ("arm", "disarm") and len(argv) == 1:
             return arm(home, command == "arm")
         else:
-            sys.stderr.write(__doc__.split("\n\n")[1] + "\n")
+            sys.stderr.write(next(p for p in __doc__.split("\n\n") if p.startswith("Usage:")) + "\n")
             return 2
     except Refused as e:
         sys.stderr.write("fm-frontdoor: %s\n" % e)
