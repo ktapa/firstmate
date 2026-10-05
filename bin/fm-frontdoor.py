@@ -7,13 +7,10 @@ command (the server repo's frontdoor-command) owns the grammar, the limits and
 the exit statuses; this file matches them and is the only firstmate code that
 talks to it.
 
-This change is part 1 of 2: it covers polling requests and queueing replies.
-`put-digest` and the status digest land in the stacked follow-up change, so
-until then nothing calls `put-digest`.
-
 Usage:
-  fm-frontdoor.py poll           file each new request into the captain inbox
-                                 and ack it
+  fm-frontdoor.py poll           file each new request into the captain inbox,
+                                 ack it, and push the digest when it is due
+  fm-frontdoor.py digest [--print]   build the digest; push it now, or print it
   fm-frontdoor.py reply [--id ID] [--request RID] [--ask]   queue a reply for
                                  the owner's Slack DM, its text on stdin
   fm-frontdoor.py arm | disarm   register or retire state/frontdoor.check.sh
@@ -28,6 +25,14 @@ never approved. The only programs this file starts are ssh, bin/fm-inbox.sh and
 the check registration scripts, so nothing in a request can dispatch, merge or
 run anything. Work starts only on the owner's approval in firstmate's own
 window or Remote Control.
+
+DIGEST. Built only from the backlog's task lines (never note bodies or logs),
+only for projects config/frontdoor names. A title with a secret shape, a network
+address, a long number, an "@" or a deny word is dropped whole; links, paths and
+task IDs are removed; and every line is held to the server's own checks before
+it is sent. In flight is `in-progress`, held for the owner is
+`waiting-on-owner`, other queued work is `coming-up` (deferred work is left
+out) and the backlog's recent Done is `done`.
 
 Configuration is config/frontdoor (docs/configuration.md "Hermes front door");
 an absent file means the front door is off and `poll` does nothing.
@@ -45,7 +50,8 @@ import time
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BIN)
-from fm_voice_records import config_dir, default_home, state_dir  # noqa: E402
+from fm_voice_records import (DATE_TAG, ITEM, TAG, config_dir, data_dir,  # noqa: E402
+                              default_home, state_dir)
 
 CHECK_ID = "frontdoor"
 CALL_SECONDS = 15        # one ssh call; the server's own limit is 20
@@ -53,11 +59,16 @@ POLL_SECONDS = int(os.environ.get("FM_FRONTDOOR_POLL_SECONDS", "24"))  # inside 
 MIN_CALL = 6             # seconds a call needs left before it starts
 LATE_POLLS = 3           # polls in a row out of time before firstmate hears of it
 PER_POLL = 10            # requests filed per poll; the rest wait for the next
-# From the server's frontdoor-command: limits, grammar and secret shapes (D-072, D-077).
-MAX_LISTED, MAX_REQUEST, MAX_REPLY = 100, 65536, 8192
+DIGEST_EVERY = 86400     # resend an unchanged digest daily; the server calls 3 days stale
+PER_FIELD = 5
+# From the server's frontdoor-command: limits, grammar and digest checks (D-072, D-077).
+MAX_LISTED, MAX_REQUEST, MAX_DIGEST, MAX_REPLY, MAX_DIGEST_LINES = 100, 65536, 16384, 8192, 100
 MAX_POST = 39000         # the relay's limit on a post, escaped (frontdoor-relay)
 ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+DIGEST_LINE = re.compile(r"(project|done|in-progress|waiting-on-owner|coming-up): "
+                         r"([^\s\x00-\x1f\x7f-\x9f](?:[^\x00-\x1f\x7f-\x9f]{0,198}[^\s\x00-\x1f\x7f-\x9f])?)")
+PROJECT = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 SECRET = re.compile("|".join((
     r"xox[a-z]-[A-Za-z0-9-]{6}", r"xapp-[A-Za-z0-9-]{6}", r"(?i:hc-ping\.com/)",
     r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY",
@@ -68,8 +79,17 @@ SECRET = re.compile("|".join((
     r"(?<![0-9])100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}(?![0-9])",
     r"(?i:(?<![0-9a-f])fd7a:115c:a1e0:)",
 )))
+ADDRESS = re.compile(r"(?i:[a-z][a-z0-9+.-]*://|www\.)|@")
 # The bot's tool writes this first line (the server repo's frontdoor-tools, D-076).
 HEAD = re.compile(r"kind: (?:request|answer (%s) reply (%s))\n\n" % (ID.pattern, ID.pattern))
+LINKISH = re.compile(r"\S*(?:[a-z][a-z0-9+.-]*://|www\.)\S*", re.I)
+# Any token with a slash but a plain "word/word" pair is a path.
+PATHISH = re.compile(r"(?<!\S)(?![A-Za-z-]+/[A-Za-z-]+[,.;:)]?(?!\S))\S*/\S*")
+# A line naming a network address or a long number (an account, member or phone
+# number) is dropped whole, as is one with a secret shape, an "@" or a deny word.
+PRIVATE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.])|(?i:\b[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,})"
+                     r"|\d{6,}|@")
+BLOCKED_BY = re.compile(r"\bblocked-by: \S+")
 STATUS_TEXT = {64: "the server refused the command (a bug here)", 65: "the server refused the input",
                66: "no such request", 73: "that ID is already there with other content (a bug here)",
                75: "the server stayed busy", 255: "the server could not be reached",
@@ -91,15 +111,28 @@ def load_config(home):
             raw = handle.read()
     except FileNotFoundError:
         return None
-    cfg = {"user": "frontdoor", "interval": "0"}
+    cfg = {"user": "frontdoor", "interval": "0", "project": [], "deny": []}
     for n, line in enumerate(raw.splitlines(), 1):
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
         key, sep, value = (part.strip() for part in line.partition("="))
-        if not sep or key not in ("host", "key", "user", "interval") or not value:
+        if not sep or key not in ("host", "key", "user", "interval", "project", "deny") or not value:
             raise Refused("config/frontdoor line %d is not one of its settings" % n)
-        cfg[key] = value
+        if key == "project":
+            words = value.split()
+            if len(words) > 3 or not PROJECT.fullmatch(words[0]):
+                raise Refused("config/frontdoor line %d: project=NAME [REPO [TITLE-PREFIX]]" % n)
+            cfg["project"].append((words + words[:1] * 2)[:3])
+        elif key == "deny":
+            cfg["deny"].append(value.lower())
+        else:
+            cfg[key] = value
+    names = [project[0] for project in cfg["project"]]
+    for name in names:
+        if names.count(name) > 1 or not line_ok("project: " + name) or any(w in name for w in cfg["deny"]):
+            raise Refused("config/frontdoor: project %s is named twice, or the server or deny= would refuse it"
+                          % name)
     if "host" not in cfg or "key" not in cfg or not cfg["interval"].isdigit():
         raise Refused("config/frontdoor needs host= and key=, and interval= in whole seconds")
     cfg["key"] = os.path.expanduser(cfg["key"])
@@ -231,6 +264,78 @@ def import_one(home, cfg, rid, deadline):
     check_ok(ssh(cfg, "ack " + rid, deadline=deadline)[0], "ack " + rid)
 
 
+def clean_title(title, prefix, deny, task_ids):
+    if not title.lower().startswith(prefix.lower() + ":"):
+        return None
+    raw = title[len(prefix) + 1:]
+    # Judged whole, before anything is cut, so truncation cannot hide a match.
+    if SECRET.search(raw) or PRIVATE.search(raw) or any(word in raw.lower() for word in deny):
+        return None
+    words = BLOCKED_BY.sub("", PATHISH.sub("", LINKISH.sub("", raw))).split()
+    value = " ".join(word for word in words if word.strip(",.;:()") not in task_ids)
+    if len(value) > 200:
+        value = value[:197].rstrip() + "..."
+    return value or None
+
+
+def build_digest(home, cfg):
+    sections = {"in flight": [], "queued": [], "done": []}
+    section, task_ids = None, set()
+    try:
+        with open(os.path.join(data_dir(home), "backlog.md"), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    for line in lines:
+        if ITEM.match(line):
+            task_ids.add(ITEM.match(line).group("id"))
+        if line.startswith("## "):
+            section = line[3:].strip().lower()
+        elif section in sections and ITEM.match(line):
+            rest = ITEM.match(line).group("rest")
+            tags = {m.group("key"): m.group("value") for m in TAG.finditer(rest)}
+            title = " ".join(DATE_TAG.sub("", TAG.sub("", rest)).split())
+            if section == "queued" and "hold" in tags:
+                if tags.get("hold-kind") == "future":
+                    continue
+                field = "waiting-on-owner"
+            else:
+                field = {"in flight": "in-progress", "queued": "coming-up", "done": "done"}[section]
+            sections[section].append((tags.get("repo"), title, field))
+    out = []
+    for name, repo, prefix in cfg["project"]:
+        out.append("project: " + name)
+        counts = {}
+        for items in sections.values():
+            for item_repo, title, field in items:
+                value = clean_title(title, prefix, cfg["deny"], task_ids) if item_repo == repo else None
+                line = "%s: %s" % (field, value)
+                if value and counts.get(field, 0) < PER_FIELD and line_ok(line):
+                    counts[field] = counts.get(field, 0) + 1
+                    out.append(line)
+    while len(out) > MAX_DIGEST_LINES or len("\n".join(out).encode()) >= MAX_DIGEST:
+        out.pop()
+    return "".join(line + "\n" for line in out)
+
+
+def line_ok(line):
+    return bool(DIGEST_LINE.fullmatch(line)) and line.isprintable() and not (
+        SECRET.search(line) or ADDRESS.search(line))
+
+
+def push_digest(home, cfg, force, deadline=None):
+    text = build_digest(home, cfg)
+    if not text:
+        return
+    stamp = ledger(home, ".", "digest-sent")
+    sha = hashlib.sha256(text.encode()).hexdigest()
+    last = (read_file(stamp) or "- 0").split()
+    if not force and last[0] == sha and time.time() - int(last[1]) < DIGEST_EVERY:
+        return
+    check_ok(ssh(cfg, "put-digest", data=text.encode(), deadline=deadline)[0], "put-digest")
+    write_file(stamp, "%s %d" % (sha, time.time()))
+
+
 def poll(home, cfg):
     marker = ledger(home, ".", "last-poll")
     if os.path.exists(marker) and time.time() - os.path.getmtime(marker) < int(cfg["interval"]):
@@ -250,6 +355,9 @@ def poll(home, cfg):
                 import_one(home, cfg, rid, deadline)
             except Refused as e:
                 problems.append(str(e))
+        push_digest(home, cfg, False, deadline)
+    except Refused as e:
+        problems.append(str(e))
     except Later:
         count = int(read_file(late) or 0) + 1
         write_file(late, str(count))
@@ -354,6 +462,14 @@ def main(argv):
                 problems = []
             if problems is not None:
                 report(home, problems)
+        elif command == "digest" and argv[1:] in ([], ["--print"]):
+            cfg = load_config(home)
+            if cfg is None:
+                raise Refused("the front door is off: config/frontdoor is absent")
+            if argv[1:]:
+                sys.stdout.write(build_digest(home, cfg))
+            else:
+                push_digest(home, cfg, True)
         elif command == "reply":
             reply(home, argv[1:])
         elif command in ("arm", "disarm") and len(argv) == 1:

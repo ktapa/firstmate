@@ -91,7 +91,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Private secondmate config-reread generations with their retry and quarantine state.
 - Per-task steering-inbox records under `state/<id>.inbox/` (`bin/fm-task-inbox-lib.sh`).
 - Parent-owned secondmate pending-reply records under `state/pending-replies/` (`bin/fm-pending-reply-lib.sh`).
-- Hermes front door import and reply ledgers under `state/frontdoor/` (`bin/fm-frontdoor.py`).
+- Hermes front door import, reply, and digest ledgers under `state/frontdoor/` (`bin/fm-frontdoor.py`).
 
 `config/` holds local gitignored operating choices, including explicit extension bindings under `config/extensions.d/`.
 
@@ -1470,18 +1470,18 @@ A fail-closed poll that already queued a wake, and a timeout, always print so th
 
 ## Hermes front door (config/frontdoor)
 
-The Hermes front door brings requests the owner shapes with a Hermes bot in Slack to firstmate, and sends replies back.
+The Hermes front door brings requests the owner shapes with a Hermes bot in Slack to firstmate, and sends a status digest and replies back.
 It runs over one SSH account on the owner's server whose forced command allows only `list`, `get`, `ack`, `put-digest` and `put-reply`.
 `bin/fm-frontdoor.py` is the laptop side and its header owns the commands; the server's own setup guide owns the account and its key.
 It is off unless `config/frontdoor` exists.
-This is part 1 of 2: it covers polling requests and queueing replies.
-The digest (`put-digest`, the personal-project allowlist and the secret, link and address pre-check) lands in the stacked follow-up change, so until then nothing calls `put-digest`.
 
 ```sh
 host = server-name                    # required: the server, as ssh reaches it
 key = ~/.ssh/frontdoor_ed25519        # required: the front door's own private key
 user = frontdoor                      # optional
 interval = 0                          # optional: the least seconds between polls
+project = NAME [REPO [TITLE-PREFIX]]  # repeatable: a project the digest may show
+deny = WORD                           # repeatable: drop any digest line holding it, any case
 ```
 
 Making the key and accepting the server's host key are the owner's steps; ssh runs with `StrictHostKeyChecking=yes`, so the first connection is made by hand.
@@ -1489,6 +1489,11 @@ Making the key and accepting the server's host key are the owner's steps; ssh ru
 
 Each new request becomes a captain inbox note labelled untrusted, with the bot's text inside a fence that carries a random nonce, and is then acknowledged, which means imported and never approved.
 A request is a proposal only: nothing in it is an instruction or an approval, and work starts only when the captain approves the exact request, plan and budget in firstmate's own window or Remote Control.
+
+The digest reads only backlog task lines, never note bodies or logs.
+A task line counts for a `project` when its `repo:` tag is REPO and its title starts with `TITLE-PREFIX:`, both defaulting to NAME.
+A title holding a secret shape, a network address, a long number, an `@` or a `deny` word is left out whole; links, paths and task IDs are removed from the rest.
+Name only personal projects, and add a `deny` word for any name that must never leave the laptop.
 
 ## Relay (.env)
 

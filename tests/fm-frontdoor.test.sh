@@ -4,8 +4,10 @@
 # Runs offline against a stub of the server's forced command: the stub keeps a
 # spool folder, answers list/get/ack/put-digest/put-reply with the server's exit
 # statuses, and logs every command it was asked to run. The cases that matter
-# most are the authority ones: fake approvals, fake fences and shell text inside
-# a request reach the inbox as fenced, labelled data and start nothing.
+# most are the authority ones (fake approvals, fake fences and shell text inside
+# a request reach the inbox as fenced, labelled data and start nothing) and the
+# digest's privacy boundary (only configured projects, never note bodies, links,
+# IDs or deny words). The markers below are invented for this fixture.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -145,6 +147,63 @@ printf 'kind: request\n\nbusy\n' > "$SPOOL/requests/r-busy"
 assert_equals "" "$(FD_FAULT=busy-once fd poll)" "a busy server is retried"
 assert_present "$SPOOL/acks/r-busy" "the request was imported after the retry"
 pass "malformed, oversize, unreachable and busy answers are handled"
+
+# --- the digest: configured projects, fixed fields, nothing private -----------
+cat > "$H/data/backlog.md" <<'EOF'
+# Backlog
+
+## In flight
+- [ ] alpha-one - alpha: wire the reminder timer https://github.com/example/alpha/pull/9 (repo: alpha) (kind: ship) (since 2026-10-01)
+  Note body mentioning NEVERLEAVES and the rate we agreed.
+- [ ] shop-two - shop: price list for ACMECORP (repo: shop) (kind: ship)
+- [ ] alpha-tok - alpha: rotate xoxb-1234567890-abcdef (repo: alpha) (kind: ship)
+
+## Queued
+- [ ] alpha-three - alpha: pick the backup drive (repo: alpha) (kind: task) (hold-kind: captain) (hold: owner decides)
+- [ ] alpha-four - alpha: tidy the logs data/alpha-x/report.md blocked-by: alpha-one (repo: alpha) (kind: ship)
+- [ ] alpha-five - alpha: someday maybe (repo: alpha) (kind: task) (hold-kind: future) (hold: deferred)
+- [ ] alpha-six - alpha: mail bob@example.com about it (repo: alpha) (kind: task)
+- [ ] alpha-seven - client: DENYWORD visit (repo: alpha) (kind: task)
+- [ ] alpha-eight - alpha: plan the DENYWORD visit (repo: alpha) (kind: task)
+- [ ] alpha-addr - alpha: move 192.168.1.20 to the rack (repo: alpha) (kind: task)
+- [ ] alpha-acct - alpha: renew account 99887766 (repo: alpha) (kind: task)
+- [ ] alpha-long - alpha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA (repo: alpha) (kind: task)
+- [ ] alpha-ref - alpha: follow up on alpha-three /home/someone/private today (repo: alpha) (kind: task)
+
+## Done
+- [x] alpha-nine - alpha: front door step 95 (repo: alpha) (done 2026-10-02)
+EOF
+cat >> "$H/config/frontdoor" <<'EOF'
+project = alpha
+project = beta beta-repo
+deny = denyword
+EOF
+want='project: alpha
+in-progress: wire the reminder timer
+waiting-on-owner: pick the backup drive
+coming-up: tidy the logs
+coming-up: follow up on today
+done: front door step 95
+project: beta'
+assert_equals "$want" "$(fd digest --print)" "the digest holds only allowed fields of configured projects"
+: > "$SPOOL/calls"
+fd digest
+assert_equals "$want" "$(cat "$SPOOL/digest")" "digest pushed with put-digest"
+assert_equals put-digest "$(cat "$SPOOL/calls")" "digest push sends one command"
+: > "$SPOOL/calls"
+fd poll >/dev/null
+assert_equals list "$(cat "$SPOOL/calls")" "an unchanged digest is not resent within a day"
+sed -i 's/^## Queued$/- [ ] alpha-ten - alpha: one more (repo: alpha) (kind: ship)\n\n## Queued/' "$H/data/backlog.md"
+fd poll >/dev/null
+assert_contains "$(cat "$SPOOL/digest")" "in-progress: one more" "a changed digest is pushed by the poll"
+printf 'project = alpha\n' >> "$H/config/frontdoor"
+err=$(fd digest --print 2>&1) && fail "a project named twice is refused"
+assert_contains "$err" "project alpha is named twice" "duplicate project refused"
+sed -i '$d' "$H/config/frontdoor"
+printf 'project = tskey-x\n' >> "$H/config/frontdoor"
+fd digest --print >/dev/null 2>&1 && fail "a project name the server would refuse is refused"
+sed -i '$d' "$H/config/frontdoor"
+pass "the digest keeps to configured projects and the server's fields"
 
 # --- replies --------------------------------------------------------------------
 out=$(printf 'Which drive should the backup use?\n' | fd reply --id fm-7 --request r-1 --ask)
