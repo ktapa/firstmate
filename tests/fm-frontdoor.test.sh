@@ -149,7 +149,8 @@ assert_present "$SPOOL/acks/r-busy" "the request was imported after the retry"
 pass "malformed, oversize, unreachable and busy answers are handled"
 
 # --- the digest: configured projects, fixed fields, nothing private -----------
-cat > "$H/data/backlog.md" <<'EOF'
+RECENT=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=2))')
+cat > "$H/data/backlog.md" <<EOF
 # Backlog
 
 ## In flight
@@ -171,7 +172,8 @@ cat > "$H/data/backlog.md" <<'EOF'
 - [ ] alpha-ref - alpha: follow up on alpha-three /home/someone/private today (repo: alpha) (kind: task)
 
 ## Done
-- [x] alpha-nine - alpha: front door step 95 (repo: alpha) (done 2026-10-02)
+- [x] alpha-nine - alpha: front door step 95 (repo: alpha) (done $RECENT)
+- [x] alpha-old - alpha: finished long ago (repo: alpha) (done 2020-01-01)
 EOF
 cat >> "$H/config/frontdoor" <<'EOF'
 project = alpha
@@ -179,12 +181,9 @@ project = beta beta-repo
 deny = denyword
 EOF
 want='project: alpha
-in-progress: wire the reminder timer
 waiting-on-owner: pick the backup drive
-coming-up: tidy the logs
-coming-up: follow up on today
-done: front door step 95
-project: beta'
+in-progress: wire the reminder timer
+done: front door'
 assert_equals "$want" "$(fd digest --print)" "the digest holds only allowed fields of configured projects"
 : > "$SPOOL/calls"
 fd digest
@@ -195,7 +194,7 @@ fd poll >/dev/null
 assert_equals list "$(cat "$SPOOL/calls")" "an unchanged digest is not resent within a day"
 sed -i 's/^## Queued$/- [ ] alpha-ten - alpha: one more (repo: alpha) (kind: ship)\n\n## Queued/' "$H/data/backlog.md"
 fd poll >/dev/null
-assert_contains "$(cat "$SPOOL/digest")" "in-progress: one more" "a changed digest is pushed by the poll"
+assert_contains "$(cat "$SPOOL/digest")" "one more" "a changed digest is pushed by the poll"
 printf 'project = alpha\n' >> "$H/config/frontdoor"
 err=$(fd digest --print 2>&1) && fail "a project named twice is refused"
 assert_contains "$err" "project alpha is named twice" "duplicate project refused"
@@ -204,6 +203,58 @@ printf 'project = tskey-x\n' >> "$H/config/frontdoor"
 fd digest --print >/dev/null 2>&1 && fail "a project name the server would refuse is refused"
 sed -i '$d' "$H/config/frontdoor"
 pass "the digest keeps to configured projects and the server's fields"
+
+# --- the short form: caps, parked work, chores, the archive -------------------
+rm "$SPOOL/digest"
+D1=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=1))')
+D3=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=3))')
+cat > "$H/data/backlog.md" <<EOF
+# Backlog
+
+## In flight
+- [ ] a-1 - alpha: tidy the logs (repo: alpha) (kind: ship)
+- [ ] a-2 - alpha: speed up the nightly CI check (repo: alpha) (kind: ship)
+- [ ] a-3 - alpha: rename helpers (repo: alpha) (kind: chore)
+
+## Queued
+- [ ] a-4 - alpha: pick the second option - the long background that follows (repo: alpha) (kind: task) (since 2026-10-03) (hold: waiting on you) (hold-kind: captain)
+- [ ] a-5 - alpha: choose a bigger model (the options are in the report) PR C (repo: alpha) (kind: task) (since 2026-10-01) (hold: waiting on you) (hold-kind: captain)
+- [ ] a-6 - alpha: parked by words (repo: alpha) (kind: task) (hold: Captain 2026-09-28: hold off of alpha for now) (hold-kind: captain)
+- [ ] a-7 - alpha: parked by date (repo: alpha) (kind: task) (hold: later) (hold-kind: future)
+- [ ] a-8 - alpha: third decision (repo: alpha) (kind: task) (since 2026-10-04) (hold: yes or no) (hold-kind: captain)
+- [ ] a-9 - alpha: fourth decision (repo: alpha) (kind: task) (since 2026-10-05) (hold: yes or no) (hold-kind: captain)
+- [ ] a-10 - alpha: blocked next blocked-by: a-1 (repo: alpha) (kind: ship)
+- [ ] a-11 - alpha: the real next one (repo: alpha) (kind: ship)
+- [ ] b-1 - beta: next but not asked for (repo: beta-repo) (kind: ship)
+
+## Done
+- [x] a-12 - alpha: ship one (repo: alpha) (done $D1)
+- [x] a-13 - alpha: ship two (repo: alpha) (merged $D3)
+- [x] a-14 - alpha: ship three (repo: alpha) (done $RECENT)
+EOF
+cat > "$H/data/done-archive.md" <<EOF
+## Archived $D3
+- [x] a-15 - alpha: ship four from the archive (repo: alpha) (merged $D3)
+- [x] a-16 - alpha: archived long ago (repo: alpha) (merged 2020-01-01)
+EOF
+printf 'skip = CI check\nskip-kind = chore\nnext = alpha\n' >> "$H/config/frontdoor"
+want='project: alpha
+waiting-on-owner: choose a bigger model
+waiting-on-owner: pick the second option
+waiting-on-owner: third decision
+in-progress: tidy the logs
+coming-up: the real next one
+done: ship one
+done: ship three
+done: ship two'
+assert_equals "$want" "$(fd digest --print)" "the short form: oldest asks first, parked and chores out, 7-day done recap, next only where asked"
+rm -f "$H/data/done-archive.md"
+printf '# Backlog\n\n## In flight\n- [ ] a-2 - alpha: speed up the nightly CI check (repo: alpha)\n- [ ] a-3 - alpha: rename helpers (repo: alpha) (kind: chore)\n' > "$H/data/backlog.md"
+assert_equals "project: alpha" "$(fd digest --print)" "chores are skipped by title word and by kind, and an empty digest still names a project"
+printf 'next = nowhere\n' >> "$H/config/frontdoor"
+fd digest --print >/dev/null 2>&1 && fail "next= naming no project is refused"
+sed -i "\$d" "$H/config/frontdoor"
+pass "the digest is the short form"
 
 # --- replies --------------------------------------------------------------------
 out=$(printf 'Which drive should the backup use?\n' | fd reply --id fm-7 --request r-1 --ask)

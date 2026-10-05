@@ -27,12 +27,19 @@ run anything. Work starts only on the owner's approval in firstmate's own
 window or Remote Control.
 
 DIGEST. Built only from the backlog's task lines (never note bodies or logs),
-only for projects config/frontdoor names. A title with a secret shape, a network
-address, a long number, an "@" or a deny word is dropped whole; links, paths and
-task IDs are removed; and every line is held to the server's own checks before
-it is sent. In flight is `in-progress`, held for the owner is
-`waiting-on-owner`, other queued work is `coming-up` (deferred work is left
-out) and the backlog's recent Done is `done`.
+only for projects config/frontdoor names, and kept short enough to read at a
+glance: at most 3 `waiting-on-owner` lines (held for the owner, oldest first),
+one `in-progress` line per project, and at most 3 `done` lines (closed in the
+last 7 days, from the backlog's Done section and data/done-archive.md). Other
+queued work (`coming-up`) shows only for a project named by next=, and only its
+next unblocked item. Work held with a future date or a "hold off" reason is
+parked and never shown. Titles are cut to plain short words (repo prefix, brackets, PR
+letters, step and slice numbers, links, paths and task IDs removed). A task
+whose kind is in skip-kind= or whose title holds a skip= word (a whole word, any case) is internal
+chores and left out. A title with a secret shape, a network address, a long
+number, an "@" or a deny word is dropped whole, and every line is held to the
+server's own checks before it is sent. The home server's Monday reminder and the
+bot's status tool both read this one digest, so this is the short form for both.
 
 Configuration is config/frontdoor (docs/configuration.md "Hermes front door");
 an absent file means the front door is off and `poll` does nothing.
@@ -47,6 +54,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import date, timedelta
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BIN)
@@ -60,7 +68,12 @@ MIN_CALL = 6             # seconds a call needs left before it starts
 LATE_POLLS = 3           # polls in a row out of time before firstmate hears of it
 PER_POLL = 10            # requests filed per poll; the rest wait for the next
 DIGEST_EVERY = 86400     # resend an unchanged digest daily; the server calls 3 days stale
-PER_FIELD = 5
+# Per-digest limits, so the Monday reminder stays about eight lines.
+MAX_NEEDS, MAX_DONE, MAX_PROGRESS, DONE_DAYS, TITLE_WORDS_CHARS = 3, 3, 3, 7, 80
+# A hold whose first words say the work is parked, not waiting on the owner.
+PARKED = ("hold off", "hold on any", "not scheduled", "deferred", "resumes", "revisit only")
+CLOSED = re.compile(r"\((?:done|merged|reported) (\d{4}-\d{2}-\d{2})\)")
+JARGON = re.compile(r"\bPRs? [A-Z]\b|\bslices? \d+\b|\bsteps? \d+(?: to \d+)?(?:'s)?")
 # From the server's frontdoor-command: limits, grammar and digest checks (D-072, D-077).
 MAX_LISTED, MAX_REQUEST, MAX_DIGEST, MAX_REPLY, MAX_DIGEST_LINES = 100, 65536, 16384, 8192, 100
 MAX_POST = 39000         # the relay's limit on a post, escaped (frontdoor-relay)
@@ -111,21 +124,23 @@ def load_config(home):
             raw = handle.read()
     except FileNotFoundError:
         return None
-    cfg = {"user": "frontdoor", "interval": "0", "project": [], "deny": []}
+    cfg = {"user": "frontdoor", "interval": "0", "project": [], "deny": [], "skip": [], "skip-kind": [],
+           "next": []}
     for n, line in enumerate(raw.splitlines(), 1):
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
         key, sep, value = (part.strip() for part in line.partition("="))
-        if not sep or key not in ("host", "key", "user", "interval", "project", "deny") or not value:
+        if not sep or key not in ("host", "key", "user", "interval", "project", "deny", "skip",
+                                          "skip-kind", "next") or not value:
             raise Refused("config/frontdoor line %d is not one of its settings" % n)
         if key == "project":
             words = value.split()
             if len(words) > 3 or not PROJECT.fullmatch(words[0]):
                 raise Refused("config/frontdoor line %d: project=NAME [REPO [TITLE-PREFIX]]" % n)
             cfg["project"].append((words + words[:1] * 2)[:3])
-        elif key == "deny":
-            cfg["deny"].append(value.lower())
+        elif key in ("deny", "skip", "skip-kind", "next"):
+            cfg[key].append(value.lower())
         else:
             cfg[key] = value
     names = [project[0] for project in cfg["project"]]
@@ -133,6 +148,8 @@ def load_config(home):
         if names.count(name) > 1 or not line_ok("project: " + name) or any(w in name for w in cfg["deny"]):
             raise Refused("config/frontdoor: project %s is named twice, or the server or deny= would refuse it"
                           % name)
+    if any(name not in names for name in cfg["next"]):
+        raise Refused("config/frontdoor: next= names a project that has no project= line")
     if "host" not in cfg or "key" not in cfg or not cfg["interval"].isdigit():
         raise Refused("config/frontdoor needs host= and key=, and interval= in whole seconds")
     cfg["key"] = os.path.expanduser(cfg["key"])
@@ -264,57 +281,111 @@ def import_one(home, cfg, rid, deadline):
     check_ok(ssh(cfg, "ack " + rid, deadline=deadline)[0], "ack " + rid)
 
 
-def clean_title(title, prefix, deny, task_ids):
+def clean_title(title, prefix, cfg, task_ids):
     if not title.lower().startswith(prefix.lower() + ":"):
         return None
     raw = title[len(prefix) + 1:]
     # Judged whole, before anything is cut, so truncation cannot hide a match.
-    if SECRET.search(raw) or PRIVATE.search(raw) or any(word in raw.lower() for word in deny):
+    if SECRET.search(raw) or PRIVATE.search(raw):
+        return None
+    if any(word in raw.lower() for word in cfg["deny"]):
+        return None
+    if any(re.search(r"\b%s\b" % re.escape(word), raw, re.I) for word in cfg["skip"]):
         return None
     words = BLOCKED_BY.sub("", PATHISH.sub("", LINKISH.sub("", raw))).split()
-    value = " ".join(word for word in words if word.strip(",.;:()") not in task_ids)
-    if len(value) > 200:
-        value = value[:197].rstrip() + "..."
+    value = JARGON.sub("", " ".join(word for word in words if word.strip(",.;:()") not in task_ids))
+    value = " ".join(re.sub(r" ?\([^)]*\)", "", value).split())
+    # Keep the plain lead; the detail after a dash or a semicolon stays on the laptop.
+    for cut in (" - ", "; "):
+        head = value.split(cut, 1)[0]
+        if len(head.split()) >= 2:
+            value = head
+    value = value.strip(" -:,;.?")
+    if len(value) > TITLE_WORDS_CHARS:
+        value = value[:TITLE_WORDS_CHARS].rsplit(" ", 1)[0].rstrip(" -:,;.?") + "..."
     return value or None
 
 
-def build_digest(home, cfg):
-    sections = {"in flight": [], "queued": [], "done": []}
-    section, task_ids = None, set()
+def backlog_items(path, sections=None):
+    """Yields (section, id, rest) for each task line of a backlog-shaped file."""
+    section = None
     try:
-        with open(os.path.join(data_dir(home), "backlog.md"), encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             lines = handle.read().splitlines()
     except FileNotFoundError:
-        lines = []
+        return
     for line in lines:
-        if ITEM.match(line):
-            task_ids.add(ITEM.match(line).group("id"))
         if line.startswith("## "):
             section = line[3:].strip().lower()
-        elif section in sections and ITEM.match(line):
-            rest = ITEM.match(line).group("rest")
+        elif ITEM.match(line) and (sections is None or section in sections):
+            m = ITEM.match(line)
+            yield section, m.group("id"), m.group("rest")
+
+
+def parked(tags):
+    hold = tags.get("hold")
+    return hold is not None and (tags.get("hold-kind") == "future"
+                                 or any(word in hold[:80].lower() for word in PARKED))
+
+
+def build_digest(home, cfg):
+    task_ids = {item_id for _, item_id, _ in backlog_items(os.path.join(data_dir(home), "backlog.md"))}
+    entries = []     # (field, repo, since, blocked, title, kind)
+    seen = set()
+    since_day = (date.today() - timedelta(days=DONE_DAYS)).isoformat()
+    sources = ((os.path.join(data_dir(home), "backlog.md"), ("in flight", "queued", "done")),
+               (os.path.join(data_dir(home), "done-archive.md"), None))
+    for path, wanted in sources:
+        for section, item_id, rest in backlog_items(path, wanted):
+            if item_id in seen:
+                continue
+            seen.add(item_id)
             tags = {m.group("key"): m.group("value") for m in TAG.finditer(rest)}
             title = " ".join(DATE_TAG.sub("", TAG.sub("", rest)).split())
-            if section == "queued" and "hold" in tags:
-                if tags.get("hold-kind") == "future":
+            if tags.get("kind", "").lower() in cfg["skip-kind"]:
+                continue
+            if section == "in flight":
+                field = "in-progress"
+            elif section == "queued":
+                if parked(tags):
                     continue
-                field = "waiting-on-owner"
+                field = "waiting-on-owner" if "hold" in tags else "coming-up"
             else:
-                field = {"in flight": "in-progress", "queued": "coming-up", "done": "done"}[section]
-            sections[section].append((tags.get("repo"), title, field))
-    out = []
+                closed = CLOSED.search(rest)
+                if not closed or closed.group(1) < since_day:
+                    continue
+                field = "done"
+            since = re.search(r"\(since (\d{4}-\d{2}-\d{2})\)", rest)
+            entries.append((field, tags.get("repo"), since.group(1) if since else "9999", "blocked-by:" in title,
+                            title, closed.group(1) if field == "done" else ""))
+    picks = {}       # field -> [(sort key, project, title)], over every project
     for name, repo, prefix in cfg["project"]:
-        out.append("project: " + name)
-        counts = {}
-        for items in sections.values():
-            for item_repo, title, field in items:
-                value = clean_title(title, prefix, cfg["deny"], task_ids) if item_repo == repo else None
-                line = "%s: %s" % (field, value)
-                if value and counts.get(field, 0) < PER_FIELD and line_ok(line):
-                    counts[field] = counts.get(field, 0) + 1
-                    out.append(line)
-    while len(out) > MAX_DIGEST_LINES or len("\n".join(out).encode()) >= MAX_DIGEST:
-        out.pop()
+        for field, item_repo, since, blocked, title, closed in entries:
+            value = clean_title(title, prefix, cfg, task_ids) if item_repo == repo else None
+            if value and not (field == "coming-up" and (blocked or name not in cfg["next"])):
+                picks.setdefault(field, []).append((closed if field == "done" else since, name, value))
+    # Overall caps: the oldest asks, the newest finished work, the first work under way.
+    keep = {"waiting-on-owner": sorted(picks.get("waiting-on-owner", []))[:MAX_NEEDS],
+            "done": sorted(picks.get("done", []), reverse=True)[:MAX_DONE],
+            "in-progress": picks.get("in-progress", [])[:MAX_PROGRESS]}
+    out = []
+    for name, _, _ in cfg["project"]:
+        lines = []
+        for field in ("waiting-on-owner", "in-progress", "coming-up", "done"):
+            titles = list(dict.fromkeys(t for _, n, t in keep.get(field, []) if n == name))
+            if field == "coming-up":
+                titles = [t for _, n, t in picks.get(field, []) if n == name][:1]
+            if field == "in-progress" and titles:
+                while len(titles) > 1 and not line_ok("in-progress: " + "; ".join(titles)):
+                    titles.pop()
+                titles = ["; ".join(titles)]
+            lines += [l for l in ("%s: %s" % (field, t) for t in titles) if line_ok(l)]
+        if lines:
+            out.append("project: " + name)
+            out += lines
+    # The server wants a first project line, and a digest with nothing in it still replaces the old one.
+    if not out and cfg["project"]:
+        out = ["project: " + cfg["project"][0][0]]
     return "".join(line + "\n" for line in out)
 
 
