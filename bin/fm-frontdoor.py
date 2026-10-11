@@ -395,7 +395,11 @@ def import_one(home, cfg, rid, deadline, entries):
         private = private_reason(text, kind, label, entries)
         if private:
             # Recorded before the note exists, so no brief made from it can reach Jev first.
-            record_private(home, rid, text)
+            try:
+                record_private(home, rid, text)
+            except OSError as e:
+                raise Refused("request %s could not be recorded as private (%s); left unacknowledged"
+                              % (rid, e.strerror or e)) from None
         try:
             filed = subprocess.run([os.path.join(BIN, "fm-inbox.sh"), "note", "--request-id",
                                     "frontdoor-" + rid, "-"], input=note_body(rid, text, private).encode(),
@@ -405,7 +409,11 @@ def import_one(home, cfg, rid, deadline, entries):
             filed = None
         if filed is None or filed.returncode != 0:
             raise Refused("request %s could not be filed in the inbox; left unacknowledged" % rid)
-        write_file(seen, digest)
+        try:
+            write_file(seen, digest)
+        except OSError as e:
+            raise Refused("request %s could not be recorded as imported (%s); left unacknowledged"
+                          % (rid, e.strerror or e)) from None
     elif known != digest:
         raise Refused("request %s came back with other content; left unacknowledged" % rid)
     check_ok(ssh(cfg, "ack " + rid, deadline=deadline)[0], "ack " + rid)
