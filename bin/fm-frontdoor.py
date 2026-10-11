@@ -395,11 +395,7 @@ def import_one(home, cfg, rid, deadline, entries):
         private = private_reason(text, kind, label, entries)
         if private:
             # Recorded before the note exists, so no brief made from it can reach Jev first.
-            try:
-                record_private(home, rid, text)
-            except OSError as e:
-                raise Refused("request %s could not be recorded as private (%s); left unacknowledged"
-                              % (rid, e.strerror or e)) from None
+            record_private(home, rid, text)
         try:
             filed = subprocess.run([os.path.join(BIN, "fm-inbox.sh"), "note", "--request-id",
                                     "frontdoor-" + rid, "-"], input=note_body(rid, text, private).encode(),
@@ -409,11 +405,7 @@ def import_one(home, cfg, rid, deadline, entries):
             filed = None
         if filed is None or filed.returncode != 0:
             raise Refused("request %s could not be filed in the inbox; left unacknowledged" % rid)
-        try:
-            write_file(seen, digest)
-        except OSError as e:
-            raise Refused("request %s could not be recorded as imported (%s); left unacknowledged"
-                          % (rid, e.strerror or e)) from None
+        write_file(seen, digest)
     elif known != digest:
         raise Refused("request %s came back with other content; left unacknowledged" % rid)
     check_ok(ssh(cfg, "ack " + rid, deadline=deadline)[0], "ack " + rid)
@@ -669,8 +661,8 @@ def main(argv):
             try:
                 cfg = load_config(home)
                 problems = None if cfg is None else poll(home, cfg)
-            except Refused as e:
-                cfg, problems = True, [str(e)]
+            except (OSError, Refused) as e:
+                cfg, problems = True, [str(e) if isinstance(e, Refused) else "state could not be written: %s" % (e.strerror or e)]
             except Later:
                 problems = []
             if problems is not None:
