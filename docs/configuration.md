@@ -1134,6 +1134,7 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
+A brief made from a private Hermes front door request returns `escalate` naming that request, with no network or quota call even when the key is set; the captain then picks the lane (see "Hermes front door").
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.
@@ -1159,7 +1160,8 @@ The scaffold's standard setup, rules, and definition-of-done text is the same in
 **Never-send list (config/dispatch-never-send)**
 
 The optional local, gitignored `config/dispatch-never-send` keeps values you name from ever leaving the machine in a resolver request.
-It has no default entries, and an absent file changes nothing.
+It has no default entries, and an absent file changes nothing unless the Hermes front door is on.
+While `config/frontdoor` exists the list is required: the resolver stops, as below, when it is absent, unreadable, or has no entries, and the front door files no request (see "Hermes front door").
 Like `config/crew-dispatch.json`, it is inherited into secondmate homes, so a secondmate's resolver withholds the same values.
 
 Each non-blank line not beginning with `#` is one literal value, matched case-insensitively.
@@ -1492,6 +1494,15 @@ Making the key and accepting the server's host key are the owner's steps; ssh ru
 
 Each new request becomes a captain inbox note labelled untrusted, with the bot's text inside a fence that carries a random nonce, and is then acknowledged, which means imported and never approved.
 A request is a proposal only: nothing in it is an instruction or an approval, and work starts only when the captain approves the exact request, plan and budget in firstmate's own window or Remote Control.
+
+The bot's code heads each request with `kind: request`, `kind: question`, or `kind: answer QUESTION reply REPLY`, then an optional `privacy: private` line the owner's "send anyway" adds, then a blank line; the note shows the kind and the privacy first.
+A request labelled private, one whose first line is not that header, and one holding a never-send name or a secret shape is private on the laptop: Jev never sees it, and the captain reviews it and picks its lane.
+Before its note is filed, `state/frontdoor/private/` records hashes of the text's runs of words, never the text, and `bin/fm-dispatch-resolve.sh` returns `escalate` without any network call for a brief that quotes such a request or names `front door request ID`.
+A brief that cannot be checked is not sent either.
+The label only adds caution; a request without it is still untrusted, and every request still needs the captain's go.
+
+The never-send list (`config/dispatch-never-send`, see "Never-send list") is required while the front door is on: with it absent, unreadable, or without an entry, the poll files nothing and connects to nothing, so requests wait on the server.
+Keep the same names in it as the server's own never-send list.
 
 The digest reads only backlog task lines, never note bodies or logs, and is the short form that both the home server's Monday reminder and the bot's status tool read.
 It holds at most 3 held-for-the-owner lines (oldest first), one in-progress line per project, and at most 3 tasks closed in the last 7 days (from the backlog's Done section and `data/done-archive.md`).

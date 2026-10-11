@@ -44,6 +44,15 @@
 #   "dispatch-resolve: off (...; nothing sent)" line on stderr naming at most
 #   the list line number, never its value, prints nothing on stdout, and exits
 #   0 with no network or quota call, exactly like the absent-key off path.
+#   While the Hermes front door is on ($FM_HOME/config/frontdoor exists) the
+#   list is required: absent, unreadable or with no entries is the same off.
+#
+# Front door privacy: while the front door is on, or private request records
+#   exist under state/frontdoor/private, `fm-frontdoor.py check-brief` runs
+#   first, before the opt-in gate. A brief that quotes or names a private
+#   front door request prints status escalate with that request's ID and
+#   makes no network or quota call: Jev is skipped and the captain picks the
+#   lane. A check that cannot tell is the off line above, nothing sent.
 #
 # Output (stdout, TOON-style block):
 #   dispatch-resolve:
@@ -97,6 +106,10 @@ TS_TIMEOUT=5
 DEFAULT_WHEN="No listed rule applies to this task."
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
+never_send_off() {
+  echo "dispatch-resolve: off ($1; nothing sent)" >&2
+  exit 0
+}
 no_rules() {
   printf 'dispatch-resolve:\n  status: escalate\n  reason: no rules to match\n'
   exit 0
@@ -120,6 +133,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ---- front door privacy (bin/fm-frontdoor.py "KINDS AND PRIVACY") ---------------
+FRONTDOOR_ON=0
+{ [ -e "$CONFIG/frontdoor" ] || [ -L "$CONFIG/frontdoor" ]; } && FRONTDOOR_ON=1
+if [ -n "$BRIEF" ] && { [ "$FRONTDOOR_ON" = 1 ] || [ -e "${FM_STATE_OVERRIDE:-$FM_HOME/state}/frontdoor/private" ]; }; then
+  [ -r "$BRIEF" ] || die "brief file not readable: $BRIEF"
+  FD_HIT=$(FM_HOME=$FM_HOME python3 "$SCRIPT_DIR/fm-frontdoor.py" check-brief "$BRIEF" 2>/dev/null)
+  FD_RC=$?
+  if [ "$FD_RC" = 3 ] && [[ $FD_HIT =~ ^front\ door\ request\ [a-z0-9][a-z0-9-]{0,63}$ ]]; then
+    printf 'dispatch-resolve:\n  status: escalate\n  reason: %s is private: Jev skipped; the captain reviews it and picks its lane\n' "$FD_HIT"
+    exit 0
+  fi
+  { [ "$FD_RC" = 0 ] && [ -z "$FD_HIT" ]; } \
+    || never_send_off "could not check the brief against private front door requests"
+fi
+
 # ---- opt-in gate ---------------------------------------------------------------
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
   TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
@@ -127,6 +155,13 @@ fi
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
   echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env)" >&2
   exit 0
+fi
+
+if [ "$FRONTDOOR_ON" = 1 ]; then
+  { [ -f "$NEVER_SEND_PATH" ] && [ -r "$NEVER_SEND_PATH" ]; } \
+    || never_send_off "the front door is on and $NEVER_SEND_PATH is absent or unreadable: configure it before use"
+  grep -qv -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$NEVER_SEND_PATH" 2>/dev/null \
+    || never_send_off "the front door is on and $NEVER_SEND_PATH has no entries: configure it before use"
 fi
 
 # ---- inputs --------------------------------------------------------------------
@@ -246,11 +281,6 @@ QUOTA=$(mktemp) || { rm -f "$RESP_FILE"; die "mktemp failed"; }
 TASK_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA"; die "mktemp failed"; }
 SEND_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT"; die "mktemp failed"; }
 trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT"' EXIT
-
-never_send_off() {
-  echo "dispatch-resolve: off ($1; nothing sent)" >&2
-  exit 0
-}
 
 # Checks every string the request carries, so no text reaches the network
 # unchecked. grep's own stderr is discarded because it can echo the pattern.
