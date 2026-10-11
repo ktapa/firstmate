@@ -70,6 +70,18 @@ assert_absent "$SPOOL/calls" "a missing key makes no connection, so ssh never fa
 : > "$TMP_ROOT/frontdoor_key"
 printf 'host = server.example\nkey = %s/frontdoor_key\n' "$TMP_ROOT" > "$H/config/frontdoor"
 
+# --- the never-send list is required ------------------------------------------
+NEVER="$H/config/dispatch-never-send"
+assert_contains "$(fd poll)" "frontdoor: config/dispatch-never-send is absent: the front door files nothing" "an absent list is refused"
+printf '# names\n\n   \n' > "$NEVER"
+assert_contains "$(fd poll)" "config/dispatch-never-send has no entries" "a list with no entries is refused"
+rm "$NEVER"; mkdir "$NEVER"
+assert_contains "$(fd poll)" "config/dispatch-never-send is not a readable text file" "a list that is not a file is refused"
+rmdir "$NEVER"
+assert_absent "$SPOOL/calls" "a missing or empty list makes no connection, so every request waits on the server"
+printf '# names\n  Orchid   Holdings \n' > "$NEVER"
+pass "the front door files nothing until the never-send list has an entry"
+
 # --- authority: a request is fenced, labelled data that starts nothing --------
 cat > "$SPOOL/requests/r-1" <<EOF
 kind: request
@@ -307,6 +319,67 @@ sed -i '/^interval = 3600$/d' "$H/config/frontdoor"
 assert_equals "" "$(FD_FAULT=unreachable fd poll)" "so the same outage is still not reported twice"
 fd poll >/dev/null
 pass "a slow server is reported only when it lasts, and interval= keeps the problem record"
+
+# --- kinds and privacy: private text never reaches Jev ------------------------
+note_of() { grep -l "UNTRUSTED front door request $1 " "$H"/state/inbox/*.note | xargs cat; }
+printf 'kind: question\n\nWhat does the backup drive cost each month to run?\n' > "$SPOOL/requests/r-q"
+printf 'kind: request\nprivacy: private\n\nDraft the letter about the lease renewal for my flat in the west wing.\n' > "$SPOOL/requests/r-p"
+printf 'kind: question\nprivacy: private\n\nIs my blood test due before the trip?\n' > "$SPOOL/requests/r-pq"
+printf 'kind: answer fm-1-q reply fm-1\nprivacy: private\n\nThe second one, the one I keep at home.\n' > "$SPOOL/requests/r-pa"
+printf 'kind: memo\n\nRebuild the garden shed schedule from scratch please.\n' > "$SPOOL/requests/r-u"
+printf 'kind: request\n\nSend the quote to orchid\n holdings by Friday.\n' > "$SPOOL/requests/r-n"
+printf 'kind: request\n\nUse the token ghp_abcdefghijklmnopqrstuvwxyz to fetch it.\n' > "$SPOOL/requests/r-s"
+fd poll >/dev/null
+q=$(note_of r-q)
+assert_contains "$q" "Kind, as the bot recorded it: a question for Claude to answer." "the question kind is read"
+assert_contains "$q" "Privacy: no private label." "an unlabelled question is not private"
+assert_not_contains "$q" "kind: question" "the header is not part of the untrusted text"
+assert_absent "$H/state/frontdoor/private/r-q" "an ordinary request records nothing private"
+p=$(note_of r-p)
+assert_contains "$p" "Kind, as the bot recorded it: a request." "a labelled request keeps its kind"
+assert_contains "$p" "Privacy: PRIVATE, because the owner sent it as private (\"send anyway\"). Keep it from Jev" "the private label is shown first"
+assert_not_contains "$p" "privacy: private" "the label line is not part of the untrusted text"
+assert_contains "$(note_of r-pq)" "Kind, as the bot recorded it: a question for Claude to answer." "a private question keeps its kind"
+assert_contains "$(note_of r-pq)" "Privacy: PRIVATE" "a private question is private"
+assert_contains "$(note_of r-pa)" "an answer to Firstmate's question fm-1-q (reply fm-1)" "a private answer keeps its kind"
+assert_contains "$(note_of r-pa)" "Privacy: PRIVATE" "a private answer is private"
+u=$(note_of r-u)
+assert_contains "$u" "Kind, as the bot recorded it: unknown: its first line is not the bot's header." "an unknown header stays unknown"
+assert_contains "$u" "Privacy: PRIVATE, because its first line is not the bot's header" "an unknown header is private"
+assert_contains "$u" "kind: memo" "an unknown header stays in the untrusted text"
+assert_contains "$(note_of r-n)" "Privacy: PRIVATE, because it holds a never-send name (list line 2)" "a never-send name is private, any case or wrapping"
+assert_not_contains "$(note_of r-n)" "Orchid Holdings" "the note never repeats the listed value"
+assert_contains "$(note_of r-s)" "Privacy: PRIVATE, because it holds a secret shape" "a secret shape is private"
+for rid in r-p r-pq r-pa r-u r-n r-s; do
+  assert_present "$H/state/frontdoor/private/$rid" "private request $rid is recorded"
+  assert_present "$SPOOL/acks/$rid" "private request $rid is filed and acknowledged"
+done
+assert_not_contains "$(cat "$H"/state/frontdoor/private/*)" "lease" "the private record holds hashes, never the text"
+pass "the question kind and the private label are read, and unknown, never-send and secret text is private"
+
+brief() { printf '# Task\n## Captain'"'"'s intent\n%s\n' "$1" > "$TMP_ROOT/brief.md"; }
+brief 'Please draft the LETTER about the lease
+renewal, for my flat.'
+out=$(fd check-brief "$TMP_ROOT/brief.md"); rc=$?
+expect_code 3 "$rc" "a brief quoting private text"
+assert_equals "front door request r-p" "$out" "check-brief names the private request it quotes, across case, wrapping and punctuation"
+brief 'Handle front door request r-u for the captain.'
+assert_equals "front door request r-u" "$(fd check-brief "$TMP_ROOT/brief.md")" "a brief naming a private request"
+brief 'See frontdoor-r-pq.'
+assert_equals "front door request r-pq" "$(fd check-brief "$TMP_ROOT/brief.md")" "a brief naming a private request by its inbox ID"
+brief 'What does the backup drive cost each month to run? See front door request r-q and front door request r-pqx.'
+out=$(fd check-brief "$TMP_ROOT/brief.md"); rc=$?
+expect_code 0 "$rc" "a brief made from ordinary requests"
+assert_equals "" "$out" "an ordinary brief is silent"
+out=$(fd check-brief "$TMP_ROOT/missing.md" 2>&1); rc=$?
+expect_code 1 "$rc" "an unreadable brief"
+assert_contains "$out" "check-brief could not tell" "an unreadable brief cannot be cleared"
+printf 'garbage\n' > "$H/state/frontdoor/private/r-bad"
+brief 'Nothing private here at all.'
+out=$(fd check-brief "$TMP_ROOT/brief.md" 2>&1); rc=$?
+expect_code 1 "$rc" "a damaged private record"
+rm "$H/state/frontdoor/private/r-bad"
+pass "check-brief finds a brief made from a private request, and cannot be cleared when it cannot tell"
 
 # --- arming the watcher check ------------------------------------------------------
 fd arm >/dev/null || fail "arm registers the check"

@@ -340,6 +340,75 @@ assert_contains "$out" '  status: clear' "no list resolves exactly as before"
 assert_contains "$(jq -r .state.task.brief "$LOG/body")" 'Acme-Ledger' "no list sends the task text as before"
 pass "never-send list withholds the request on a match or a bad list, and never prints the value"
 
+# --- Hermes front door: private requests skip Jev; the list is required -------
+FD_SPOOL="$TMP_ROOT/fd-spool"
+mkdir -p "$FD_SPOOL/requests"
+cat > "$TMP_ROOT/fd-ssh" <<'SH'
+#!/usr/bin/env bash
+set -- ${!#}
+case "$1" in
+  list) ls "$FD_SPOOL/requests" ;;
+  get) cat "$FD_SPOOL/requests/$2" ;;
+  ack) : ;;
+  put-digest) cat >/dev/null ;;
+  *) exit 64 ;;
+esac
+SH
+chmod +x "$TMP_ROOT/fd-ssh"
+: > "$TMP_ROOT/fd-key"
+printf 'host = server.example\nkey = %s/fd-key\n' "$TMP_ROOT" > "$HOME_DIR/config/frontdoor"
+printf '%s\n' '# names' 'Orchid Holdings' > "$NEVER_SEND"
+printf 'kind: request\nprivacy: private\n\nDraft the letter about the lease renewal for my flat in the west wing.\n' > "$FD_SPOOL/requests/r-p"
+printf 'kind: question\n\nWhat does the backup drive cost each month to run?\n' > "$FD_SPOOL/requests/r-q"
+FD_SPOOL=$FD_SPOOL FM_HOME=$HOME_DIR FM_FRONTDOOR_SSH="$TMP_ROOT/fd-ssh" python3 "$ROOT/bin/fm-frontdoor.py" poll \
+  || fail "the front door poll filed the requests"
+assert_present "$HOME_DIR/state/frontdoor/private/r-p" "the private request is recorded"
+FD_BRIEF="$TMP_ROOT/fd-brief.md"
+expect_private() {  # <label> <request id>
+  expect_code 0 "$code" "$1 exits 0"
+  assert_contains "$out" '  status: escalate' "$1 escalates to the captain"
+  assert_contains "$out" "  reason: front door request $2 is private: Jev skipped; the captain reviews it and picks its lane" "$1 names the request and the lane"
+  assert_absent "$LOG/argv" "$1 never calls curl, so the text never reaches Jev"
+  assert_absent "$LOG/quota-axi.calls" "$1 never reads quota"
+}
+printf '# Task\n## Captain'"'"'s intent\nDraft the letter about the lease\nrenewal for my flat.\n' > "$FD_BRIEF"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+expect_private "a brief quoting a private request" r-p
+printf '# Task\n## Captain'"'"'s intent\nDo what front door request r-p asks.\n' > "$FD_BRIEF"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+expect_private "a brief naming a private request" r-p
+reset_log
+run code out err "$FD_BRIEF" --project pager
+expect_private "a private brief with the key absent" r-p
+mv "$HOME_DIR/config/frontdoor" "$TMP_ROOT/frontdoor.off"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+expect_private "a private brief after the front door is turned off" r-p
+mv "$TMP_ROOT/frontdoor.off" "$HOME_DIR/config/frontdoor"
+printf '# Task\n## Captain'"'"'s intent\nWhat does the backup drive cost each month to run? See front door request r-q.\n' > "$FD_BRIEF"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+assert_contains "$out" '  status: clear' "a brief from an ordinary request resolves as before"
+assert_contains "$(jq -r .state.task.brief "$LOG/body")" 'backup drive' "an ordinary request's text is sent"
+printf 'garbage\n' > "$HOME_DIR/state/frontdoor/private/r-bad"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+expect_withheld "a private record the check cannot read" "could not check the brief against private front door requests"
+rm "$HOME_DIR/state/frontdoor/private/r-bad"
+rm "$NEVER_SEND"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+expect_withheld "an absent list while the front door is on" "the front door is on and $NEVER_SEND is absent or unreadable: configure it before use"
+printf '%s\n' '# names only in comments' '   ' > "$NEVER_SEND"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$FD_BRIEF" --project pager
+expect_withheld "a list with no entries while the front door is on" "the front door is on and $NEVER_SEND has no entries: configure it before use"
+rm -rf "$NEVER_SEND" "$HOME_DIR/config/frontdoor" "$HOME_DIR/state"
+pass "a brief from a private front door request skips Jev, and the front door requires the never-send list"
+
 # --- rules are snapshotted and line output is injection-safe -------------------
 MUTATED_RULES="$TMP_ROOT/mutated-rules.json"
 jq '.rules[3].use = {"harness":"claude","model":"opus"}' "$BASE_RULES" > "$MUTATED_RULES"
